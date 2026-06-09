@@ -76,6 +76,33 @@ cargo run
 cargo run --bin smtp-test
 ```
 
+## Docker Deployment
+
+Maileroo provides a highly optimized, fully self-contained Docker image that packages the application binary, embedded migrations, and compiled static assets.
+
+### Running with Docker Compose
+
+An easy, zero-dependency SQLite-based setup is provided in the `docker/` directory.
+
+1. Navigate to the `docker/` directory or run the command using the file flag:
+   ```bash
+   docker compose -f docker/docker-compose.yml up -d
+   ```
+
+2. Make sure to customize the environment variables in `docker/docker-compose.yml`:
+   * `SRS_SECRET`: A secure random string for Sender Rewriting Scheme cryptographic signature.
+   * `PROD_DOMAIN`: Your primary mail domain.
+   * `ADMIN_EMAIL` & `ADMIN_PASSWORD`: Credentials to set up your primary admin account on first start.
+
+All emails, certificates, and SQLite database data will persist under a named Docker volume (`maileroo-data`).
+
+### Building the Image Locally
+
+To compile and build the self-contained production image on your machine:
+```bash
+docker build -t maileroo .
+```
+
 ## Project Structure
 
 * `src/inbound/`: Inbound SMTP server, connection rate-limiting, blocklisting, and protocol session state.

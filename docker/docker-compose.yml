@@ -1,0 +1,24 @@
+version: '3.8'
+
+services:
+  maileroo:
+    # We reference the root Dockerfile since we are running compose from the root
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    image: ghcr.io/adrianpino/maileroo:latest
+    ports:
+      - "3000:3000"    # Web Dashboard (HTTP)
+      - "25:2525"      # SMTP Port
+    environment:
+      - DATABASE_URL=sqlite:///app/storage/maileroo.db?mode=rwc
+      - SRS_SECRET=change-this-to-a-secure-random-string
+      - PROD_DOMAIN=mail.yourdomain.com
+      - ADMIN_EMAIL=admin@yourdomain.com
+      - ADMIN_PASSWORD=ChangeThisSecurePassword!
+    volumes:
+      - maileroo-data:/app/storage
+    restart: unless-stopped
+
+volumes:
+  maileroo-data:
