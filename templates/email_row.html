@@ -1,0 +1,62 @@
+<tr id="email-{{ email.id }}" class="{% if !email.is_viewed %}unread{% endif %}">
+    <td style="width: 40px; text-align: center;">
+        <input type="checkbox" name="email_ids" value="{{ email.id }}" class="email-checkbox" style="cursor: pointer;">
+    </td>
+    <td class="sender-cell">
+        {{ email.correspondent_email }}
+    </td>
+    <td>
+        <!-- This link is only active on mobile to make the whole row clickable -->
+        {% match email.status %}
+            {% when Some with (status) %}
+                {% if status.to_string() == "Draft" %}
+                    <a hx-get="/api/v1/emails/compose?draft_id={{ email.id }}" hx-target="#maileroo-modal-placeholder" class="mobile-row-link" style="display: none;"></a>
+                {% else %}
+                    <a href="/emails/{{ email.id }}" class="mobile-row-link" style="display: none;"></a>
+                {% endif %}
+            {% when None %}
+                <a href="/emails/{{ email.id }}" class="mobile-row-link" style="display: none;"></a>
+        {% endmatch %}
+        {% if !email.alias_address.is_empty() %}
+        <span
+            style="font-size: 0.75rem; background: #edf2f7; color: #4a5568; padding: 2px 6px; border-radius: 4px; margin-right: 8px;">
+            {{ email.alias_address }}
+        </span>
+        {% endif %}
+        {{ email.subject }}
+    </td>
+    <td id="status-{{ email.id }}" class="forwarded-cell desktop-only">
+        {% if email.is_sent_folder %}
+            {% match email.status %}
+                {% when Some with (status) %}
+                    <span class="forwarded-badge" style="text-transform: capitalize;">
+                        {{ status.to_string() }}
+                    </span>
+                {% when None %}
+            {% endmatch %}
+        {% else %}
+            <!-- Removed forwarded badge for received emails since it is not exposed in DisplayEmail -->
+        {% endif %}
+    </td>
+    <td class="date-cell">{{ email.date.to_string()[..16] }}</td>
+    <td style="text-align: right; white-space: nowrap;">
+        {% match email.status %}
+            {% when Some with (status) %}
+                {% if status.to_string() == "Draft" %}
+                    <button class="btn btn-view" hx-get="/api/v1/emails/compose?draft_id={{ email.id }}" hx-target="#maileroo-modal-placeholder">{{ locale.view_button() }}</button>
+                {% else %}
+                    <a href="/emails/{{ email.id }}" class="btn btn-view">{{ locale.view_button() }}</a>
+                {% endif %}
+                <button class="btn btn-delete" hx-get="/emails/{{ email.id }}/delete-confirm"
+                    hx-target="#maileroo-modal-placeholder">
+                    {{ locale.delete_button() }}
+                </button>
+            {% when None %}
+                <a href="/emails/{{ email.id }}" class="btn btn-view">{{ locale.view_button() }}</a>
+                <button class="btn btn-delete" hx-get="/emails/{{ email.id }}/delete-confirm"
+                    hx-target="#maileroo-modal-placeholder">
+                    {{ locale.delete_button() }}
+                </button>
+        {% endmatch %}
+    </td>
+</tr>

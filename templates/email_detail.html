@@ -1,0 +1,339 @@
+{% extends "base.html" %}
+
+{% block title %}{{ locale.email_detail_title() }} - Maileroo{% endblock %}
+
+{% block content %}
+<style>
+    .container {
+        width: 100%;
+        max-width: 800px;
+    }
+
+    .email-header {
+        border-bottom: 2px solid #eee;
+        padding-bottom: 20px;
+        margin-bottom: 20px;
+    }
+
+    .email-header h1 {
+        margin: 0 0 10px 0;
+        font-size: 1.5rem;
+        color: #333;
+    }
+
+    .meta-info {
+        color: #666;
+        font-size: 0.9rem;
+    }
+
+    .meta-item {
+        margin-bottom: 5px;
+    }
+
+    .meta-label {
+        font-weight: bold;
+        color: #333;
+        width: 80px;
+        display: inline-block;
+    }
+
+    .forwarded-badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        padding: 4px 8px;
+        border-radius: 9999px;
+        font-size: 0.75rem;
+        font-weight: 600;
+        background-color: #f0fff4;
+        color: #2f855a;
+        border: 1px solid #c6f6d5;
+    }
+
+    .forwarded-badge.disabled {
+        background-color: #f7fafc;
+        color: #718096;
+        border-color: #e2e8f0;
+    }
+
+    .email-body {
+        background: #fdfdfd;
+        padding: 20px;
+        border: 1px solid #eee;
+        border-radius: 4px;
+        min-height: 200px;
+        color: #444;
+        line-height: 1.5;
+        overflow: auto;
+    }
+
+    .actions {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 20px;
+    }
+
+    .btn-load-remote {
+        background-color: #f8f9fa;
+        color: #333;
+        padding: 6px 12px;
+        border-radius: 4px;
+        border: 1px solid #ddd;
+        cursor: pointer;
+        font-size: 0.85rem;
+        transition: background-color 0.2s;
+    }
+
+    .btn-load-remote:hover {
+        background-color: #e9ecef;
+    }
+
+    .email-body-iframe {
+        width: 100%;
+        min-height: 400px;
+        border: 1px solid #eee;
+        border-radius: 4px;
+        background: #fdfdfd;
+        resize: vertical;
+    }
+
+    .back-link {
+        color: #007bff;
+        text-decoration: none;
+        font-size: 0.95rem;
+    }
+
+    .back-link:hover {
+        text-decoration: underline;
+    }
+
+    .btn-delete {
+        background-color: #fff5f5;
+        color: #dc3545;
+        padding: 6px 12px;
+        border-radius: 4px;
+        border: 1px solid #dc3545;
+        cursor: pointer;
+        font-size: 0.9rem;
+    }
+
+    .btn-delete:hover {
+        background-color: #dc3545;
+        color: white;
+    }
+
+    /* Reply Section Styling */
+    #replies-container {
+        margin-top: 40px;
+        border-top: 1px solid #eee;
+        padding-top: 20px;
+    }
+
+    #replies-container h2 {
+        font-size: 1.2rem;
+        margin-bottom: 20px;
+        color: #333;
+    }
+
+    .reply-form-container {
+        margin-top: 30px;
+        background: #fff;
+        border: 1px solid #ddd;
+        border-radius: 8px;
+        padding: 20px;
+        box-sizing: border-box;
+    }
+
+    .reply-form-container h3 {
+        font-size: 1rem;
+        margin-bottom: 15px;
+        color: #333;
+    }
+
+    .reply-textarea {
+        width: 100%;
+        box-sizing: border-box;
+        min-height: 120px;
+        padding: 12px;
+        border: 1px solid #ccc;
+        border-radius: 4px;
+        margin-bottom: 15px;
+        font-family: inherit;
+        font-size: 0.95rem;
+        resize: vertical;
+    }
+
+    .reply-textarea:focus {
+        outline: none;
+        border-color: #007bff;
+        box-shadow: 0 0 0 2px rgba(0, 123, 255, 0.1);
+    }
+
+    .btn-reply-send {
+        background-color: #007bff;
+        color: white;
+        border: none;
+        padding: 10px 24px;
+        font-weight: 500;
+        border-radius: 4px;
+        cursor: pointer;
+        transition: background-color 0.2s;
+    }
+
+    .btn-reply-send:hover {
+        background-color: #0056b3;
+    }
+
+    .reply-row {
+        border-left: 3px solid #007bff;
+        padding: 15px;
+        margin: 20px 0;
+        background: #f8f9fa;
+        border-radius: 0 4px 4px 0;
+        box-sizing: border-box;
+    }
+
+    .reply-meta {
+        font-size: 0.85em;
+        color: #666;
+        margin-bottom: 10px;
+        display: flex;
+        justify-content: space-between;
+    }
+
+    .reply-body {
+        color: #444;
+        line-height: 1.5;
+        word-wrap: break-word;
+        overflow-wrap: break-word;
+    }
+
+    .reply-body-text {
+        white-space: pre-wrap;
+    }
+
+    /* HTMX Loading State Feedback */
+    .htmx-request.reply-textarea,
+    .htmx-request .reply-textarea,
+    .htmx-request.btn-reply-send,
+    .htmx-request .btn-reply-send {
+        opacity: 0.6;
+        pointer-events: none;
+        cursor: not-allowed;
+    }
+
+    @media (max-width: 600px) {
+        .reply-form-container {
+            padding: 15px;
+        }
+
+        .btn-reply-send {
+            width: 100%;
+        }
+
+        .reply-row {
+            padding: 12px;
+            margin: 15px 0;
+        }
+
+        .reply-meta {
+            flex-direction: column;
+            gap: 5px;
+        }
+    }
+</style>
+
+<div id="email-detail-container">
+    <div class="actions">
+        <a href="/dashboard" class="back-link">&larr; {{ locale.back_to_dashboard() }}</a>
+        <div style="display: flex; gap: 10px;">
+            <button id="load-remote-btn" class="btn-load-remote" onclick="loadRemoteImages()">
+                {{ locale.load_remote_content() }}
+            </button>
+            <button class="btn-delete" hx-get="/emails/{{ id }}/delete-confirm?target=body&redirect=true"
+                hx-target="#maileroo-modal-placeholder">
+                {{ locale.delete_email_button() }}
+            </button>
+        </div>
+    </div>
+
+    <div class="email-header">
+        <h1>{{ subject }}</h1>
+        <div class="meta-info">
+            <div class="meta-item">
+                <span class="meta-label">{{ locale.from_label() }}</span> {{ sender }}
+            </div>
+            <div class="meta-item">
+                <span class="meta-label">{{ locale.to_label() }}</span> {{ alias_address }}
+            </div>
+            <div class="meta-item">
+                <span class="meta-label">{{ locale.date_label() }}</span> {{ date }}
+            </div>
+            <div class="meta-item" style="display: flex; align-items: center; gap: 8px;">
+                <span class="meta-label">{{ locale.forwarded_label() }}</span>
+                {% if is_forwarded %}
+                <span class="forwarded-badge">
+                    <svg style="width: 14px; height: 14px;" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M5 13l4 4L19 7"></path>
+                    </svg>
+                    {{ locale.status_yes() }}
+                </span>
+                {% else %}
+                <span class="forwarded-badge disabled">
+                    <svg style="width: 14px; height: 14px;" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M6 18L18 6M6 6l12 12">
+                        </path>
+                    </svg>
+                    {{ locale.status_no() }}
+                </span>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+
+    <iframe id="email-iframe" class="email-body-iframe" sandbox=""
+        srcdoc="&lt;meta id='csp-meta' http-equiv='Content-Security-Policy' content='default-src &amp;apos;none&amp;apos;; style-src &amp;apos;unsafe-inline&amp;apos;; img-src &amp;apos;none&amp;apos;; font-src *;'&gt;{{ body }}">
+    </iframe>
+
+    <script>
+        function loadRemoteImages() {
+            var iframe = document.getElementById('email-iframe');
+            var currentSrcDoc = iframe.getAttribute('srcdoc');
+
+            // Remove the exact CSP meta tag from the string
+            var newSrcDoc = currentSrcDoc.replace(/<meta id='csp-meta'.*?>/i, '');
+
+            iframe.setAttribute('srcdoc', newSrcDoc);
+
+            // Hide the button since they are already loaded
+            document.getElementById('load-remote-btn').style.display = 'none';
+        }
+    </script>
+
+    {% if !is_outbound %}
+    <div id="replies-container">
+        <h2>{{ locale.replies_title() }}</h2>
+        <div id="replies-list">
+            {% for reply in replies %}
+            {% include "email_reply_row.html" %}
+            {% endfor %}
+        </div>
+
+        <div class="reply-form-container">
+            <h3>{{ locale.reply_form_title() }}</h3>
+            <form hx-post="/emails/{{ id }}/reply" hx-target="#replies-list" hx-swap="beforeend"
+                hx-on::after-request="if(event.detail.successful) this.reset()">
+                <textarea name="body_text" required class="reply-textarea"
+                    placeholder="{{ locale.reply_placeholder() }}"></textarea>
+                <div style="display: flex; justify-content: flex-end;">
+                    <button type="submit" class="btn-reply-send">
+                        {{ locale.send_reply_button() }}
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+    {% endif %}
+</div>
+{% endblock %}

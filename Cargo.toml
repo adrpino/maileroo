@@ -1,0 +1,87 @@
+[package]
+name = "maileroo"
+version = "0.1.0"
+edition = "2024"
+default-run = "maileroo"
+
+
+[lib]
+name = "maileroo"
+path = "src/lib.rs"
+
+[[bin]]
+name = "maileroo"
+path = "src/main.rs"
+
+[[bin]]
+name = "smtp-test"
+path = "src/bin/smtp_test.rs"
+
+[dependencies]
+mail-parser = "0.11.1"
+mail-auth = { version = "0.9.0", features = ["generate"] }
+tokio = { version = "1.49.0", features = ["full"] }
+tokio-rustls = { version = "0.26", features = ["aws-lc-rs"] }
+rustls-acme = { version = "0.15.1", features = ["axum"] }
+pin-project-lite = "0.2"
+rustls-pemfile = "2.2.0"
+arc-swap = "1.7"
+sqlx = { version = "0.8", default-features = false, features = [
+    "runtime-tokio-rustls",
+    "postgres",
+    "sqlite",
+    "macros",
+    "uuid",
+    "time",
+] }
+dotenvy = "0.15"
+uuid = { version = "1.10", features = ["v4", "serde"] }
+serde = { version = "1.0", features = ["derive"] }
+axum = "0.8.8"
+tower-http = { version = "0.6.8", features = [
+    "trace",
+    "util",
+    "fs",
+    "set-header",
+    "compression-gzip",
+    "compression-br",
+] }
+tracing = "0.1.44"
+tracing-subscriber = "0.3.22"
+serde_json = "1.0.149"
+anyhow = "1.0.100"
+ammonia = "4.0.0"
+tokio-util = { version = "0.7", features = ["io"] }
+tokio-stream = "0.1.14"
+async-stream = "0.3.5"
+futures-util = "0.3"
+argon2 = "0.5.3"
+regex = "1.12.3"
+tower-sessions = "0.14.0"
+tower-sessions-sqlx-store = { version = "0.15.0", features = ["postgres", "sqlite"] }
+askama = "0.15.4"
+
+time = { version = "0.3", features = ["serde", "macros", "formatting"] }
+rand = { version = "0.8", features = ["small_rng"] }
+hickory-resolver = "0.26"
+rustls-native-certs = "0.8.3"
+base32 = "0.5.1"
+hmac = "0.12.1"
+sha2 = "0.10.9"
+chacha20poly1305 = "0.10.1"
+axum-server = { version = "0.8.0", features = ["tls-rustls"] }
+axum-extra = { version = "0.12.5", features = ["form"] }
+tower_governor = "0.8.0"
+dashmap = "6.2.1"
+tempfile = "3.13"
+base64 = "0.22"
+
+[dev-dependencies]
+rcgen = "0.14.8"
+reqwest = "0.13.4"
+tower = { version = "0.5.3", features = ["util"] }
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true

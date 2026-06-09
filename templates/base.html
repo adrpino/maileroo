@@ -1,0 +1,246 @@
+<!DOCTYPE html>
+<html lang="{{ locale.as_str() }}">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}{{ locale.site_title() }}{% endblock %}</title>
+    <meta name="description" content="{{ locale.site_description() }}">
+
+    <!-- Open Graph / Facebook -->
+    <meta property="og:type" content="website">
+    <meta property="og:title" content="{{ locale.site_title() }}">
+    <meta property="og:description" content="{{ locale.site_description() }}">
+
+    <!-- Twitter -->
+    <meta property="twitter:title" content="{{ locale.site_title() }}">
+    <meta property="twitter:description" content="{{ locale.site_description() }}">
+
+    <script src="/static/htmx.min.js" defer></script>
+    <script src="/static/sse.js" defer></script>
+    <script>
+        document.addEventListener("htmx:configRequest", function (evt) {
+            let match = document.cookie.match(new RegExp('(^| )csrf_token=([^;]+)'));
+            if (match) {
+                evt.detail.headers['X-CSRF-Token'] = match[2];
+            }
+        });
+    </script>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            line-height: 1.6;
+            margin: 0;
+            padding: 20px;
+            background-color: #f5f5f5;
+            min-height: 100vh;
+        }
+
+        @media (max-width: 600px) {
+            body {
+                padding: 10px;
+            }
+        }
+
+        .maileroo-app-container {
+            margin: 0 auto;
+            max-width: 1200px;
+        }
+
+        /* Global Tooltip styles */
+        .maileroo-tooltip-container {
+            position: relative;
+            display: inline-flex;
+            align-items: center;
+            margin-left: 5px;
+        }
+
+        .maileroo-tooltip-icon {
+            cursor: pointer;
+            color: #4a5568;
+            font-size: 0.9rem;
+            width: 16px;
+            height: 16px;
+            background: #cbd5e0;
+            border-radius: 50%;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .maileroo-tooltip-text {
+            visibility: hidden;
+            width: 240px;
+            background-color: #2d3748;
+            color: #fff;
+            text-align: left;
+            border-radius: 6px;
+            padding: 8px 12px;
+            position: absolute;
+            z-index: 100;
+            bottom: 125%;
+            left: 50%;
+            margin-left: -120px;
+            opacity: 0;
+            transition: opacity 0.3s;
+            font-size: 0.75rem;
+            font-weight: normal;
+            line-height: 1.4;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+        }
+
+        .maileroo-tooltip-text::after {
+            content: "";
+            position: absolute;
+            top: 100%;
+            left: 50%;
+            margin-left: -5px;
+            border-width: 5px;
+            border-style: solid;
+            border-color: #2d3748 transparent transparent transparent;
+        }
+
+        .maileroo-tooltip-container:hover .maileroo-tooltip-text {
+            visibility: visible;
+            opacity: 1;
+        }
+
+        .error {
+            background: #fee2e2;
+            color: #dc2626;
+            padding: 0.5rem;
+            border-radius: 4px;
+            margin-bottom: 1rem;
+        }
+
+        input {
+            padding: 8px;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+        }
+
+        button {
+            padding: 10px;
+            background-color: #2b6cb0;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+
+        button:hover {
+            background-color: #2c5282;
+        }
+
+        /* Modal Styles */
+        .maileroo-modal-backdrop {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0, 0, 0, 0.5);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 1000;
+            backdrop-filter: blur(2px);
+        }
+
+        .maileroo-modal-content {
+            background-color: white;
+            padding: 24px;
+            border-radius: 8px;
+            box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
+            max-width: 450px;
+            width: 100%;
+            margin: 16px;
+            box-sizing: border-box;
+        }
+
+        .maileroo-modal-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 16px;
+        }
+
+        .maileroo-modal-header h3 {
+            margin: 0;
+            color: #1a202c;
+        }
+
+        .maileroo-modal-close {
+            background: none;
+            border: none;
+            color: #4a5568;
+            cursor: pointer;
+            padding: 4px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.2s;
+        }
+
+        .maileroo-modal-close:hover {
+            color: #1a202c;
+            background-color: #edf2f7;
+        }
+
+        .maileroo-modal-body {
+            color: #2d3748;
+            margin-bottom: 24px;
+        }
+
+        .maileroo-modal-footer {
+            display: flex;
+            justify-content: flex-end;
+            gap: 12px;
+        }
+
+        .maileroo-btn {
+            padding: 8px 16px;
+            border-radius: 4px;
+            font-weight: 600;
+            cursor: pointer;
+            border: 1px solid #e2e8f0;
+            background: white;
+            color: #2d3748;
+        }
+
+        .maileroo-btn:hover {
+            background: #f7fafc;
+        }
+
+        .maileroo-btn-danger {
+            background: #fff5f5;
+            color: #c53030;
+            border-color: #feb2b2;
+        }
+
+        .maileroo-btn-danger:hover {
+            background: #c53030;
+            color: white;
+        }
+
+        .maileroo-btn-primary {
+            background: #2b6cb0;
+            color: white;
+            border-color: #2b6cb0;
+        }
+
+        .maileroo-btn-primary:hover {
+            background: #2c5282;
+        }
+    </style>
+</head>
+
+<body>
+    <main class="maileroo-app-container">
+        {% block content %}{% endblock %}
+    </main>
+    <div id="maileroo-modal-placeholder"></div>
+</body>
+
+</html>

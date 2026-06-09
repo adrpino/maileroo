@@ -1,0 +1,29 @@
+version: '3.8'
+
+services:
+  maily-db:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: mysecret
+      POSTGRES_DB: maily
+    ports:
+      - "54322:5432"
+    volumes:
+      - maily_test_db_data:/var/lib/postgresql/data
+
+  step-ca:
+    image: smallstep/step-ca
+    environment:
+      - DOCKER_STEPCA_INIT_NAME=LocalMailerooCA
+      - DOCKER_STEPCA_INIT_DNS_NAMES=localhost,step-ca
+      - DOCKER_STEPCA_INIT_PROVISIONER_NAME=admin
+      - DOCKER_STEPCA_INIT_PASSWORD=password
+    ports:
+      - "9000:9000"
+    volumes:
+      - step_ca_data:/home/step
+
+volumes:
+  maily_test_db_data:
+  step_ca_data:

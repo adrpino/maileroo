@@ -1,0 +1,357 @@
+{% extends "base.html" %}
+
+{% block title %}{{ locale.admin_panel_title() }} - Maileroo{% endblock %}
+
+{% block content %}
+<style>
+    .container {
+        width: 100%;
+        max-width: 1100px;
+    }
+
+    .admin-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 20px;
+    }
+
+    .card {
+        background: white;
+        padding: 20px;
+        border-radius: 8px;
+        box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+        margin-bottom: 20px;
+        border: 1px solid #eee;
+        display: flex;
+        gap: 40px;
+    }
+
+    .stat-item {
+        display: flex;
+        flex-direction: column;
+    }
+
+    .stat-val {
+        font-size: 2rem;
+        font-weight: 700;
+        color: #2b6cb0;
+    }
+
+    .stat-label {
+        font-size: 0.85rem;
+        color: #666;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        font-weight: 600;
+    }
+
+    .desktop-only {
+        display: table-cell;
+    }
+
+    .table-responsive {
+        width: 100%;
+        overflow-x: auto;
+        -webkit-overflow-scrolling: touch;
+        background: white;
+        border-radius: 8px;
+        box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+    }
+
+    table {
+        width: 100%;
+        border-collapse: collapse;
+    }
+
+    th,
+    td {
+        padding: 12px 15px;
+        text-align: left;
+        border-bottom: 1px solid #eee;
+    }
+
+    th {
+        background: #f8f9fa;
+        font-weight: 600;
+        font-size: 0.85rem;
+        text-transform: uppercase;
+        color: #666;
+    }
+
+    @media (max-width: 768px) {
+        .admin-header {
+            flex-direction: column;
+            align-items: flex-start;
+            gap: 15px;
+        }
+
+        .card {
+            flex-direction: column;
+            gap: 15px;
+        }
+
+        .desktop-only {
+            display: none !important;
+        }
+
+        table,
+        thead,
+        tbody,
+        th,
+        td,
+        tr {
+            display: block;
+            width: 100%;
+            box-sizing: border-box;
+        }
+
+        thead {
+            display: none;
+        }
+
+        td {
+            border: none !important;
+            padding: 8px 15px;
+        }
+
+        tr {
+            display: flex;
+            flex-direction: column;
+            padding: 15px 0;
+            border-bottom: 2px solid #edf2f7;
+        }
+
+        td:nth-child(1) {
+            font-size: 1.15rem;
+            padding-bottom: 12px;
+            font-weight: 600 !important;
+            word-break: break-all;
+        }
+
+        td[data-label] {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        td[data-label]::before {
+            content: attr(data-label);
+            font-size: 0.85rem;
+            font-weight: normal;
+            color: #718096;
+            text-transform: uppercase;
+        }
+    }
+
+    .back-link {
+        color: #3182ce;
+        text-decoration: none;
+        font-size: 0.95rem;
+    }
+
+    .back-link:hover {
+        text-decoration: underline;
+    }
+
+    .badge-admin {
+        padding: 4px 8px;
+        border-radius: 12px;
+        font-size: 0.7rem;
+        font-weight: 600;
+        background: #ebf8ff;
+        color: #2b6cb0;
+        margin-left: 8px;
+        vertical-align: middle;
+    }
+
+    .mono {
+        font-family: monospace;
+        color: #4a5568;
+        background: #f7fafc;
+        padding: 2px 4px;
+        border-radius: 4px;
+        font-size: 0.85rem;
+    }
+
+    /* Toggle Switch CSS */
+    .maileroo-toggle-wrapper {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+    }
+
+    .maileroo-toggle-switch {
+        position: relative;
+        display: inline-block;
+        width: 34px;
+        height: 20px;
+    }
+
+    .maileroo-toggle-switch input {
+        opacity: 0;
+        width: 0;
+        height: 0;
+    }
+
+    .maileroo-toggle-slider {
+        position: absolute;
+        cursor: pointer;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background-color: #ccc;
+        transition: .4s;
+        border-radius: 20px;
+    }
+
+    .maileroo-toggle-slider:before {
+        position: absolute;
+        content: "";
+        height: 14px;
+        width: 14px;
+        left: 3px;
+        bottom: 3px;
+        background-color: white;
+        transition: .4s;
+        border-radius: 50%;
+        box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+    }
+
+    .maileroo-toggle-switch input:checked+.maileroo-toggle-slider {
+        background-color: #38a169;
+    }
+
+    .maileroo-toggle-switch input:focus+.maileroo-toggle-slider {
+        box-shadow: 0 0 1px #38a169;
+    }
+
+    .maileroo-toggle-switch input:checked+.maileroo-toggle-slider:before {
+        transform: translateX(14px);
+    }
+
+    .maileroo-status-enabled {
+        font-size: 0.75rem;
+        font-weight: 600;
+        color: #38a169;
+    }
+
+    .maileroo-status-disabled {
+        font-size: 0.75rem;
+        font-weight: 600;
+        color: #718096;
+    }
+</style>
+
+<div id="admin-container">
+    <div class="admin-header">
+        <h1>{{ locale.user_management_title() }}</h1>
+        <a href="/dashboard" class="back-link">&larr; {{ locale.back_to_dashboard() }}</a>
+    </div>
+
+    <div class="card">
+        <div class="stat-item">
+            <span class="stat-val">{{ users.len() }}</span>
+            <span class="stat-label">{{ locale.admin_total_users() }}</span>
+        </div>
+    </div>
+
+    <div class="table-responsive">
+        <table>
+            <thead>
+                <tr>
+                    <th>{{ locale.admin_table_user() }}</th>
+                    <th class="desktop-only">{{ locale.admin_table_registered() }}</th>
+                    <th>{{ locale.admin_table_aliases() }}</th>
+                    <th>{{ locale.admin_table_emails() }}</th>
+                    <th class="desktop-only">{{ locale.admin_table_bypass_limit() }}</th>
+                    <th class="desktop-only">{{ locale.admin_table_disable_autoclean() }}</th>
+                    <th class="desktop-only">{{ locale.admin_table_outbound_email() }}</th>
+                    <th class="desktop-only">{{ locale.admin_table_last_login_ip() }}</th>
+                    <th>{{ locale.admin_table_last_login_at() }}</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for u in users %}
+                <tr>
+                    <td style="font-weight: 500;">
+                        {{ u.email }}
+                        {% if u.is_admin %}
+                        <span class="badge-admin">{{ locale.admin_badge_admin() }}</span>
+                        {% endif %}
+                    </td>
+                    <td class="desktop-only" style="color: #666; font-size: 0.9rem;">{{ u.created_at.to_string()[..10]
+                        }}</td>
+                    <td data-label="{{ locale.admin_table_aliases() }}" style="font-weight: 600; color: #4a5568;">{{
+                        u.alias_count }}</td>
+                    <td data-label="{{ locale.admin_table_emails() }}" style="font-weight: 600; color: #4a5568;">{{
+                        u.email_count }}</td>
+                    <td class="desktop-only text-center">
+                        <div class="maileroo-toggle-wrapper">
+                            <label class="maileroo-toggle-switch" title="{{ locale.admin_bypass_limit_tooltip() }}">
+                                <input type="checkbox" {% if u.bypass_alias_limit %}checked{% endif %}
+                                    hx-post="/admin/users/{{ u.id }}/bypass_limit" hx-swap="outerHTML"
+                                    hx-target="closest td">
+                                <span class="maileroo-toggle-slider"></span>
+                            </label>
+                            <span
+                                class="{% if u.bypass_alias_limit %}maileroo-status-enabled{% else %}maileroo-status-disabled{% endif %}">
+                                {% if u.bypass_alias_limit %}{{ locale.status_yes() }}{% else %}{{ locale.status_no()
+                                }}{% endif %}
+                            </span>
+                        </div>
+                    </td>
+                    <td class="desktop-only text-center">
+                        <div class="maileroo-toggle-wrapper">
+                            <label class="maileroo-toggle-switch" title="{{ locale.admin_disable_autoclean_tooltip() }}">
+                                <input type="checkbox" {% if u.disable_autoclean %}checked{% endif %}
+                                    hx-post="/admin/users/{{ u.id }}/disable_autoclean" hx-swap="outerHTML"
+                                    hx-target="closest td">
+                                <span class="maileroo-toggle-slider"></span>
+                            </label>
+                            <span
+                                class="{% if u.disable_autoclean %}maileroo-status-enabled{% else %}maileroo-status-disabled{% endif %}">
+                                {% if u.disable_autoclean %}{{ locale.status_yes() }}{% else %}{{ locale.status_no()
+                                }}{% endif %}
+                            </span>
+                        </div>
+                    </td>
+                    <td class="desktop-only text-center">
+                        <div class="maileroo-toggle-wrapper">
+                            <label class="maileroo-toggle-switch" title="{{ locale.admin_outbound_email_tooltip() }}">
+                                <input type="checkbox" {% if u.can_send_firsthand %}checked{% endif %}
+                                    hx-post="/admin/users/{{ u.id }}/can_send_firsthand" hx-swap="outerHTML"
+                                    hx-target="closest td">
+                                <span class="maileroo-toggle-slider"></span>
+                            </label>
+                            <span
+                                class="{% if u.can_send_firsthand %}maileroo-status-enabled{% else %}maileroo-status-disabled{% endif %}">
+                                {% if u.can_send_firsthand %}{{ locale.status_yes() }}{% else %}{{ locale.status_no()
+                                }}{% endif %}
+                            </span>
+                        </div>
+                    </td>
+                    <td class="desktop-only">
+                        {% match u.last_login_ip %}
+                        {% when Some with (ip) %}
+                        <span class="mono">{{ ip }}</span>
+                        {% when None %}
+                        <span style="color: #a0aec0; font-size: 0.85rem;">{{ locale.admin_never() }}</span>
+                        {% endmatch %}
+                    </td>
+                    <td data-label="{{ locale.admin_table_last_login_at() }}" style="color: #666; font-size: 0.9rem;">
+                        {% match u.last_login_at %}
+                        {% when Some with (dt) %}
+                        {{ dt.to_string()[..16] }}
+                        {% when None %}
+                        <span style="color: #a0aec0;">-</span>
+                        {% endmatch %}
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endblock %}

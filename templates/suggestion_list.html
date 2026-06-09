@@ -1,0 +1,12 @@
+{% for suggestion in suggestions %}
+<input 
+    type="radio" 
+    name="subdomain" 
+    value="{{ suggestion }}" 
+    id="suggestion-{{ loop.index }}" 
+    class="maileroo-alias-suggestion-radio"
+>
+<label for="suggestion-{{ loop.index }}" class="maileroo-alias-suggestion-item">
+    <span>{{ suggestion }}</span>
+</label>
+{% endfor %}

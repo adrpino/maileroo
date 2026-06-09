@@ -1,0 +1,131 @@
+<div id="maileroo-modal" class="maileroo-modal-backdrop" hx-on:click="if(event.target == this) this.remove()">
+    <div class="maileroo-modal-content" style="max-width: 650px;">
+        <div class="maileroo-modal-header">
+            <h3>{{ locale.dkim_modal_title(domain.name.as_str()) }}</h3>
+            <button class="maileroo-modal-close" hx-on:click="document.getElementById('maileroo-modal').remove()">
+                <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+            </button>
+        </div>
+        <div class="maileroo-modal-body" id="dkim-modal-body-content">
+            <div id="dkim-modal-wrapper">
+                <!-- If there's an error message passed -->
+                {% if let Some(err) = error %}
+                    <div style="background: #fff5f5; border: 1px solid #fed7d7; padding: 12px 15px; border-radius: 6px; color: #c53030; font-size: 0.9rem; margin-bottom: 20px;">
+                        <strong>⚠️ Error:</strong> {{ err }}
+                    </div>
+                {% endif %}
+
+                {% if let Some(msg) = success_message %}
+                    <!-- Success screen -->
+                    <div style="text-align: center; padding: 20px 0;">
+                        <div style="display: inline-flex; align-items: center; justify-content: center; width: 48px; height: 48px; border-radius: 50%; background: #e6fffa; color: #319795; margin-bottom: 15px;">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>
+                        </div>
+                        <h4 style="margin: 0 0 10px 0; color: #234e52; font-size: 1.1rem;">{{ msg }}</h4>
+                        <p style="margin: 0 0 20px 0; color: #4a5568; font-size: 0.9rem; line-height: 1.4;">
+                            Your outbound emails are now securely signed using the new DKIM key.
+                        </p>
+                        <button class="btn-primary" 
+                                style="background: #3182ce;"
+                                onclick="document.getElementById('maileroo-modal').remove(); window.location.reload();">
+                            Close & Refresh List
+                        </button>
+                    </div>
+                {% else %}
+
+                    <!-- Legacy Domain State (No active public key) -->
+                    {% if domain.dkim_public_key.is_none() %}
+                        <div style="background: #fffaf0; border: 1px solid #feebc8; padding: 15px; border-radius: 6px; color: #7b341e; margin-bottom: 20px; line-height: 1.5; font-size: 0.9rem;">
+                            <strong>⚠️ {{ locale.dkim_no_key_warning() }}</strong><br>
+                            {{ locale.dkim_no_key_desc() }}
+                        </div>
+                        
+                        <div style="text-align: center; padding: 20px 0;">
+                            <button class="btn-primary" 
+                                    style="background: #3182ce; padding: 12px 24px; font-size: 1rem;"
+                                    hx-post="/domains/{{ domain.id }}/rotate-dkim"
+                                    hx-target="#dkim-modal-wrapper"
+                                    hx-swap="outerHTML">
+                                {{ locale.dkim_generate_button() }}
+                            </button>
+                        </div>
+
+                    {% else %}
+                        <!-- Active DKIM key exists -->
+                        <div style="margin-bottom: 25px;">
+                            <h4 style="margin: 0 0 10px 0; color: #2d3748; font-size: 0.95rem; border-bottom: 1px solid #edf2f7; padding-bottom: 8px;">{{ locale.dkim_active_title() }}</h4>
+                            <p style="margin: 0 0 12px 0; color: #718096; font-size: 0.85rem; line-height: 1.4;">
+                                {{ locale.dkim_active_desc() }}
+                            </p>
+                            <div style="background: #edf2f7; padding: 12px 15px; border-radius: 6px; font-family: monospace; font-size: 0.8rem; border: 1px solid #e2e8f0; word-break: break-all; position: relative;">
+                                <strong>{{ locale.dkim_type_label() }}:</strong> <span class="badge" style="background: #e2e8f0; color: #4a5568;">TXT</span><br>
+                                <strong>{{ locale.dkim_host_label() }}:</strong> <span style="color: #2b6cb0;">{{ domain.dkim_selector }}._domainkey.{{ domain.name }}</span><br>
+                                <strong>{{ locale.dkim_value_label() }}:</strong> <span style="color: #2d3748;">v=DKIM1; k=ed25519; p={{ domain.dkim_public_key.clone().unwrap_or_default() }}</span>
+                                <button onclick="navigator.clipboard.writeText('v=DKIM1; k=ed25519; p={{ domain.dkim_public_key.clone().unwrap_or_default() }}').then(() => { this.innerText = 'Copied!'; setTimeout(() => this.innerText = '{{ locale.dkim_copy_button() }}', 1500) })" style="position: absolute; right: 10px; top: 10px; background: white; border: 1px solid #cbd5e0; padding: 3px 6px; border-radius: 4px; cursor: pointer; font-size: 0.7rem; color: #4a5568;">{{ locale.dkim_copy_button() }}</button>
+                            </div>
+                            
+                            {% if domain.pending_dkim_public_key.is_none() %}
+                                <div style="margin-top: 15px;">
+                                    <button class="maileroo-alias-btn" 
+                                            style="background: #edf2f7; color: #4a5568; border: 1px solid #cbd5e0;"
+                                            hx-post="/domains/{{ domain.id }}/rotate-dkim"
+                                            hx-target="#dkim-modal-wrapper"
+                                            hx-swap="outerHTML"
+                                            hx-confirm="{{ locale.dkim_rotate_confirm() }}">
+                                        {{ locale.dkim_rotate_button() }}
+                                    </button>
+                                </div>
+                            {% endif %}
+                        </div>
+                    {% endif %}
+
+                    <!-- Pending DKIM key (Rotation in progress) -->
+                    {% if let Some(pending_pub) = domain.pending_dkim_public_key %}
+                        <div style="margin-top: 25px; border-top: 2px dashed #e2e8f0; padding-top: 20px;">
+                            <h4 style="margin: 0 0 10px 0; color: #b7791f; font-size: 0.95rem; display: flex; align-items: center; gap: 8px;">
+                                <span>⌛ {{ locale.dkim_pending_title() }}</span>
+                                <span class="badge" style="background: #feebc8; color: #c05621; font-size: 0.7rem;">{{ locale.dkim_rotation_active_badge() }}</span>
+                            </h4>
+                            <p style="margin: 0 0 12px 0; color: #718096; font-size: 0.85rem; line-height: 1.4;">
+                                {{ locale.dkim_pending_desc()|safe }}
+                            </p>
+                            
+                            <div style="background: #fffaf0; padding: 12px 15px; border-radius: 6px; font-family: monospace; font-size: 0.8rem; border: 1px solid #feebc8; word-break: break-all; position: relative; margin-bottom: 15px;">
+                                <strong>{{ locale.dkim_type_label() }}:</strong> <span class="badge" style="background: #feebc8; color: #c05621;">TXT</span><br>
+                                <strong>{{ locale.dkim_host_label() }}:</strong> <span style="color: #b7791f;">{{ domain.pending_dkim_selector.clone().unwrap_or_default() }}._domainkey.{{ domain.name }}</span><br>
+                                <strong>{{ locale.dkim_value_label() }}:</strong> <span style="color: #2d3748;">v=DKIM1; k=ed25519; p={{ pending_pub }}</span>
+                                <button onclick="navigator.clipboard.writeText('v=DKIM1; k=ed25519; p={{ pending_pub }}').then(() => { this.innerText = 'Copied!'; setTimeout(() => this.innerText = '{{ locale.dkim_copy_button() }}', 1500) })" style="position: absolute; right: 10px; top: 10px; background: white; border: 1px solid #feebc8; padding: 3px 6px; border-radius: 4px; cursor: pointer; font-size: 0.7rem; color: #7b341e;">{{ locale.dkim_copy_button() }}</button>
+                            </div>
+
+                            <div style="background: #ebf8ff; border: 1px solid #bee3f8; padding: 10px 12px; border-radius: 6px; color: #2b6cb0; font-size: 0.8rem; margin-bottom: 20px; line-height: 1.4;">
+                                <strong>💡 TTL Notice:</strong> {{ locale.dkim_ttl_notice() }}
+                            </div>
+
+                            <div style="display: flex; gap: 10px;">
+                                <button class="btn-primary" 
+                                        style="background: #38a169;"
+                                        hx-post="/domains/{{ domain.id }}/verify-dkim"
+                                        hx-target="#dkim-modal-wrapper"
+                                        hx-swap="outerHTML">
+                                    {{ locale.dkim_verify_button() }}
+                                </button>
+                                <button class="maileroo-alias-btn maileroo-alias-btn-delete" 
+                                        style="background: #fff5f5; color: #e53e3e; border: 1px solid #fed7d7;"
+                                        hx-post="/domains/{{ domain.id }}/cancel-dkim-rotation"
+                                        hx-target="#dkim-modal-wrapper"
+                                        hx-swap="outerHTML"
+                                        hx-confirm="{{ locale.dkim_cancel_confirm() }}">
+                                    {{ locale.dkim_cancel_button() }}
+                                </button>
+                            </div>
+                        </div>
+                    {% endif %}
+
+                {% endif %}
+            </div>
+        </div>
+        <div class="maileroo-modal-footer">
+            <button class="maileroo-btn" onclick="document.getElementById('maileroo-modal').remove()">{{ locale.modal_cancel() }}</button>
+        </div>
+    </div>
+</div>

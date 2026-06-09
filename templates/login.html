@@ -1,0 +1,60 @@
+{% extends "base.html" %}
+
+{% block title %}Login - Maileroo{% endblock %}
+
+{% block content %}
+<style>
+    .maileroo-auth-card {
+        background: white;
+        padding: 2.5rem 2rem;
+        border-radius: 12px;
+        box-shadow: 0 4px 12px rgba(0,0,0,0.05);
+        width: 100%;
+        max-width: 420px;
+        margin: 8vh auto;
+    }
+    @media (max-width: 480px) {
+        .maileroo-auth-card {
+            padding: 2rem 1.5rem;
+            margin: 4vh 1rem;
+            width: auto;
+        }
+    }
+</style>
+<div id="login-container" class="maileroo-auth-card">
+    <h2 style="margin-top: 0;">{{ locale.login_title() }}</h2>
+    <form hx-post="/login" hx-target="#login-container" hx-swap="outerHTML">
+        {% if let Some(err) = error %}
+            <p class="error">{{ err }}</p>
+        {% endif %}
+        
+        <div style="display: flex; flex-direction: column; gap: 10px;">
+            <label>{{ locale.email_label() }}</label>
+            <input type="email" name="email" autocomplete="email" required>
+            
+            <label>{{ locale.password_label() }}</label>
+            <div id="password-wrapper" style="display: flex; gap: 5px; align-items: center;">
+                <input type="password" 
+                       name="password" 
+                       autocomplete="current-password"
+                       style="flex-grow: 1;"
+                       required>
+                <input type="hidden" name="autocomplete" value="current-password">
+                <input type="hidden" name="show" value="true">
+                <button type="button" 
+                        hx-post="/auth/password-toggle" 
+                        hx-target="#password-wrapper" 
+                        hx-swap="outerHTML"
+                        hx-include="[name='password'], [name='autocomplete'], [name='show']"
+                        style="padding: 8px; background: #eee; color: #333; border: 1px solid #ccc; width: 40px; display: flex; align-items: center; justify-content: center;">
+                    {# Eye Icon (Simplified) #}
+                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle></svg>
+                </button>
+            </div>
+            
+            <button type="submit">{{ locale.login_button() }}</button>
+            <p>{{ locale.register_link_prompt() }} <a href="/register">{{ locale.register_link_text() }}</a></p>
+        </div>
+    </form>
+</div>
+{% endblock %}

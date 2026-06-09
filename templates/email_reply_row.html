@@ -1,0 +1,48 @@
+{% match reply %}
+    {% when ThreadMessage::Inbound with { id, sender, body_text, sent_at } %}
+    <div class="reply-row" style="border-left-color: #28a745; background: #f0fff4;" id="reply-{{ id }}">
+        <div class="reply-meta">
+            <span><strong>{{ sender }}</strong></span>
+            <span>{{ sent_at.to_string()[..16] }}</span>
+        </div>
+        <div class="reply-body">
+            <template shadowrootmode="open">
+                <style>
+                    blockquote, .gmail_quote, .yahoo_quoted, #divRplyFwdMsg, #divRplyFwdMsg ~ * { display: none !important; }
+                    .remote-content-btn {
+                        display: inline-block;
+                        margin-bottom: 15px;
+                        padding: 6px 12px;
+                        background: #f8f9fa;
+                        border: 1px solid #ddd;
+                        border-radius: 4px;
+                        color: #333;
+                        font-size: 0.9em;
+                        cursor: pointer;
+                    }
+                    .remote-content-btn:hover { background: #e9ecef; }
+                </style>
+                {% if body_text.contains("data-remote-src") %}
+                <button type="button" class="remote-content-btn" onclick="
+                    const root = this.getRootNode();
+                    root.querySelectorAll('img[data-remote-src]').forEach(img => {
+                        img.src = img.getAttribute('data-remote-src');
+                        img.removeAttribute('data-remote-src');
+                    });
+                    this.remove();
+                ">{{ locale.load_remote_content() }}</button>
+                {% endif %}
+                {{ body_text|safe }}
+            </template>
+        </div>
+    </div>
+
+    {% when ThreadMessage::Outbound with { id, body_text, sent_at } %}
+    <div class="reply-row">
+        <div class="reply-meta">
+            <span><strong>{{ locale.you_replied() }}</strong></span>
+            <span>{{ sent_at.to_string()[..16] }}</span>
+        </div>
+        <div class="reply-body reply-body-text">{{ body_text }}</div>
+    </div>
+{% endmatch %}

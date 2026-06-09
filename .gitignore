@@ -1,0 +1,9 @@
+/target
+/acme-cache/
+*.pem
+.DS_Store
+.env
+.env.prod
+storage/
+certs_prod/
+.vscode/

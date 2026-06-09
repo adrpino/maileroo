@@ -1,0 +1,402 @@
+{% extends "base.html" %}
+
+{% block title %}Manage Aliases - Maileroo{% endblock %}
+
+{% block content %}
+<style>
+    .maileroo-alias-container {
+        width: 100%;
+        max-width: 900px;
+        margin: 0 auto;
+    }
+
+    .maileroo-alias-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 20px;
+    }
+
+    .maileroo-alias-card {
+        background: white;
+        padding: 20px;
+        border-radius: 8px;
+        box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+        margin-bottom: 25px;
+        border: 1px solid #eee;
+    }
+
+    .maileroo-alias-suggestion-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+        gap: 10px;
+        margin: 15px 0;
+    }
+
+    .maileroo-alias-suggestion-item {
+        padding: 10px;
+        border: 1px solid #e2e8f0;
+        border-radius: 6px;
+        cursor: pointer;
+        text-align: center;
+        font-size: 0.9rem;
+        transition: all 0.2s;
+    }
+
+    .maileroo-alias-suggestion-item:hover {
+        border-color: #2b6cb0;
+        background: #ebf8ff;
+    }
+
+    .maileroo-alias-suggestion-radio {
+        display: none;
+    }
+
+    .maileroo-alias-suggestion-radio:checked+.maileroo-alias-suggestion-item {
+        border-color: #2b6cb0;
+        background: #ebf8ff;
+        box-shadow: 0 0 0 1px #2b6cb0;
+    }
+
+    .maileroo-alias-suggestion-radio:checked+.maileroo-alias-suggestion-item span {
+        font-weight: 600;
+        color: #2b6cb0;
+    }
+
+    .maileroo-alias-table {
+        width: 100%;
+        border-collapse: collapse;
+        background: white;
+        border-radius: 8px;
+        overflow: hidden;
+    }
+
+    .maileroo-alias-table th,
+    .maileroo-alias-table td {
+        padding: 12px 15px;
+        text-align: left;
+        border-bottom: 1px solid #eee;
+    }
+
+    .maileroo-alias-table th {
+        background: #f8f9fa;
+        font-weight: 600;
+        font-size: 0.85rem;
+        text-transform: uppercase;
+        color: #2d3748;
+    }
+
+    .maileroo-alias-text {
+        font-weight: 500;
+        color: #1a202c;
+    }
+
+    .maileroo-alias-btn {
+        padding: 6px 12px;
+        border-radius: 4px;
+        text-decoration: none;
+        font-size: 0.9rem;
+        cursor: pointer;
+        border: none;
+        display: inline-block;
+    }
+
+    .maileroo-alias-btn-primary {
+        background: #2b6cb0;
+        color: white;
+        padding: 10px 24px;
+        border-radius: 4px;
+        cursor: pointer;
+        border: none;
+        font-weight: 600;
+        width: auto;
+        min-width: 200px;
+    }
+
+    .maileroo-alias-btn-primary:hover {
+        background: #2c5282;
+    }
+
+    .maileroo-alias-btn-delete {
+        background-color: #fff5f5;
+        color: #c53030;
+    }
+
+    .maileroo-alias-btn-delete:hover {
+        background-color: #c53030;
+        color: white;
+    }
+
+    .maileroo-copy-btn {
+        background: transparent;
+        border: none;
+        color: #4a5568;
+        cursor: pointer;
+        padding: 4px;
+        border-radius: 4px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        transition: all 0.2s;
+    }
+
+    .maileroo-copy-btn:hover {
+        color: #2b6cb0;
+        background: #ebf8ff;
+    }
+
+    .maileroo-copy-btn.copied {
+        color: #38a169;
+    }
+
+    .maileroo-alias-form-row {
+        margin-bottom: 20px;
+    }
+
+    .maileroo-alias-select-domain {
+        width: 100%;
+        max-width: 400px;
+        padding: 10px;
+        border-radius: 4px;
+        border: 1px solid #ddd;
+        background-color: white;
+    }
+
+    .maileroo-alias-error-msg {
+        background: #fff5f5;
+        color: #c53030;
+        padding: 12px;
+        border-radius: 6px;
+        border: 1px solid #feb2b2;
+        margin-bottom: 20px;
+        font-size: 0.9rem;
+    }
+
+    .table-responsive {
+        width: 100%;
+        overflow-x: auto;
+        -webkit-overflow-scrolling: touch;
+        background: white;
+        border-radius: 8px;
+        box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+        border: 1px solid #eee;
+    }
+
+    /* Toggle Switch CSS */
+    .maileroo-toggle-wrapper {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+    }
+
+    .maileroo-toggle-switch {
+        position: relative;
+        display: inline-block;
+        width: 34px;
+        height: 20px;
+    }
+
+    .maileroo-toggle-switch input {
+        opacity: 0;
+        width: 0;
+        height: 0;
+    }
+
+    .maileroo-toggle-slider {
+        position: absolute;
+        cursor: pointer;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background-color: #ccc;
+        transition: .4s;
+        border-radius: 20px;
+    }
+
+    .maileroo-toggle-slider:before {
+        position: absolute;
+        content: "";
+        height: 14px;
+        width: 14px;
+        left: 3px;
+        bottom: 3px;
+        background-color: white;
+        transition: .4s;
+        border-radius: 50%;
+        box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+    }
+
+    .maileroo-toggle-switch input:checked+.maileroo-toggle-slider {
+        background-color: #38a169;
+    }
+
+    .maileroo-toggle-switch input:focus+.maileroo-toggle-slider {
+        box-shadow: 0 0 1px #38a169;
+    }
+
+    .maileroo-toggle-switch input:checked+.maileroo-toggle-slider:before {
+        transform: translateX(14px);
+    }
+
+    .maileroo-status-enabled {
+        font-size: 0.75rem;
+        font-weight: 600;
+        color: #38a169;
+    }
+
+    .maileroo-status-disabled {
+        font-size: 0.75rem;
+        font-weight: 600;
+        color: #718096;
+    }
+</style>
+
+<div id="aliases-container" class="maileroo-alias-container">
+    <div class="maileroo-alias-header">
+        <h1>{{ locale.stats_aliases() }}</h1>
+        <a href="/dashboard" style="color: #2b6cb0; text-decoration: none;">&larr; {{ locale.back_to_dashboard() }}</a>
+    </div>
+
+    {% if let Some(err) = error %}
+    <div class="maileroo-alias-error-msg">{{ err }}</div>
+    {% endif %}
+
+    <div class="maileroo-alias-card">
+        <h3 style="margin-top: 0;">{{ locale.create_alias_form_title() }}</h3>
+        <form hx-post="/aliases" hx-target="#aliases-container" hx-swap="outerHTML">
+            <div class="maileroo-alias-form-row">
+                <label style="display: block; margin-bottom: 8px; font-weight: 500;">{{ locale.select_domain_label()
+                    }}</label>
+                <select name="domain_id" class="maileroo-alias-select-domain" required hx-get="/aliases/suggestions"
+                    hx-target="#suggestion-list" hx-swap="innerHTML" hx-trigger="change"
+                    hx-include="[name='domain_id']">
+                    {% for domain in domains %}
+                    <option value="{{ domain.id }}">{{ domain.name }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+
+            <label style="display: block; margin-bottom: 8px; font-weight: 500;">{{ locale.choose_subdomain_label()
+                }}</label>
+            <div class="maileroo-alias-suggestion-grid" id="suggestion-list">
+                {% include "suggestion_list.html" %}
+            </div>
+
+            <div class="maileroo-alias-form-row" style="margin-top: 20px;">
+                <label style="display: block; margin-bottom: 8px; font-weight: 500;">{{ locale.custom_subdomain_label()
+                    }}</label>
+                <input type="text" name="custom_subdomain" placeholder="custom.name" maxlength="32"
+                    style="width: 100%; max-width: 400px; padding: 10px; border: 1px solid #ddd; border-radius: 4px;">
+            </div>
+
+            <div class="maileroo-alias-form-row">
+                <label style="display: flex; align-items: center; cursor: pointer;">
+                    <input type="checkbox" name="auto_forward" value="true" checked
+                        style="margin-right: 10px; width: 18px; height: 18px;">
+                    <span style="font-weight: 500;">{{ locale.auto_forward_checkbox_label() }}</span>
+                    <div class="maileroo-tooltip-container">
+                        <span class="maileroo-tooltip-icon">i</span>
+                        <div class="maileroo-tooltip-text">
+                            When an email is sent to this alias, it is automatically forwarded to your primary email
+                            address.
+                        </div>
+                    </div>
+                </label>
+            </div>
+
+            <div style="margin-top: 30px; border-top: 1px solid #eee; padding-top: 20px; text-align: left;">
+                <div class="maileroo-tooltip-container">
+                    <button type="submit" class="maileroo-alias-btn-primary" {% if aliases.len()>= max_aliases as usize
+                        && !can_bypass_limit %}disabled style="background: #cbd5e0; cursor: not-allowed;"{% endif %}>
+                        {{ locale.create_alias_button() }}
+                    </button>
+                    {% if aliases.len() >= max_aliases as usize && !can_bypass_limit %}
+                    <div class="maileroo-tooltip-text">{{ locale.limit_reached_text(max_aliases) }}</div>
+                    {% endif %}
+                </div>
+            </div>
+        </form>
+    </div>
+
+    <div class="table-responsive">
+        <table class="maileroo-alias-table">
+            <thead>
+                <tr>
+                    <th>{{ locale.alias_address_header() }}</th>
+                    <th>{{ locale.destination_header() }}</th>
+                    <th>{{ locale.auto_forward_header() }}</th>
+                    <th style="text-align: right;">{{ locale.table_actions() }}</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for alias in aliases %}
+                <tr id="alias-{{ alias.id }}">
+                    <td class="maileroo-alias-text">
+                        {{ alias.subdomain }}@{{ alias.domain_name }}
+                        <div class="maileroo-tooltip-container">
+                            <button class="maileroo-copy-btn"
+                                onclick="copyToClipboard('{{ alias.subdomain }}@{{ alias.domain_name }}', this)">
+                                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24"
+                                    fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                                    stroke-linejoin="round" class="copy-icon">
+                                    <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                                    <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+                                </svg>
+                            </button>
+                            <div class="maileroo-tooltip-text"
+                                style="width: auto; white-space: nowrap; margin-left: -50px;">{{ locale.copy_tooltip()
+                                }}</div>
+                        </div>
+                    </td>
+                    <td style="color: #4a5568; font-size: 0.9rem;">{{ alias.destination_email }}</td>
+                    <td>
+                        <div class="maileroo-toggle-wrapper">
+                            <label class="maileroo-toggle-switch">
+                                <input type="checkbox" name="auto_forward" value="true" {% if alias.auto_forward
+                                    %}checked{% endif %} hx-post="/aliases/{{ alias.id }}/toggle-forward"
+                                    hx-target="closest td" hx-swap="innerHTML settle:400ms">
+                                <span class="maileroo-toggle-slider"></span>
+                            </label>
+                            <span
+                                class="{% if alias.auto_forward %}maileroo-status-enabled{% else %}maileroo-status-disabled{% endif %}">
+                                {% if alias.auto_forward %}{{ locale.status_enabled() }}{% else %}{{
+                                locale.status_disabled() }}{% endif %}
+                            </span>
+                        </div>
+                    </td>
+                    <td style="text-align: right;">
+                        <button class="maileroo-alias-btn maileroo-alias-btn-delete"
+                            hx-get="/aliases/{{ alias.id }}/delete-confirm" hx-target="#maileroo-modal-placeholder">
+                            {{ locale.delete_button() }}
+                        </button>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<script>
+    function copyToClipboard(text, btn) {
+        navigator.clipboard.writeText(text).then(() => {
+            const originalHtml = btn.innerHTML;
+            const tooltip = btn.nextElementSibling;
+            const originalTooltipText = tooltip.innerText;
+
+            btn.classList.add('copied');
+            btn.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#38a169" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>';
+            tooltip.innerText = 'Copied!';
+
+            setTimeout(() => {
+                btn.classList.remove('copied');
+                btn.innerHTML = originalHtml;
+                tooltip.innerText = originalTooltipText;
+            }, 1500);
+        }).catch(err => {
+            console.error('Failed to copy: ', err);
+        });
+    }
+</script>
+{% endblock %}

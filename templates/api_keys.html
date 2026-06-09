@@ -1,0 +1,74 @@
+{% extends "base.html" %}
+
+{% block title %}{{ locale.api_keys_title() }} - Maileroo{% endblock %}
+
+{% block content %}
+<style>
+    .container { width: 100%; max-width: 800px; }
+    .api-key-list { background: white; border-radius: 12px; box-shadow: 0 2px 10px rgba(0,0,0,0.05); border: 1px solid #eee; margin-top: 20px; }
+    .key-row { display: flex; justify-content: space-between; align-items: center; padding: 15px 20px; border-bottom: 1px solid #eee; }
+    .key-row:last-child { border-bottom: none; }
+    .key-info { display: flex; flex-direction: column; }
+    .key-name { font-weight: 600; color: #2d3748; }
+    .key-date { font-size: 0.8rem; color: #718096; }
+    .new-key-alert { background-color: #f0fff4; border: 1px solid #c6f6d5; color: #2f855a; padding: 15px; border-radius: 8px; margin-bottom: 20px; }
+    .key-display { font-family: monospace; background: #edf2f7; padding: 10px; border-radius: 4px; display: block; margin-top: 10px; word-break: break-all; }
+    .btn-delete { color: #e53e3e; background: none; border: none; cursor: pointer; font-weight: 600; font-size: 0.9rem; }
+    .btn-delete:hover { text-decoration: underline; }
+    .create-form { background: white; padding: 20px; border-radius: 12px; border: 1px solid #eee; margin-bottom: 30px; }
+    .form-group { margin-bottom: 15px; }
+    .form-group label { display: block; margin-bottom: 5px; font-weight: 500; }
+    .form-control { width: 100%; padding: 8px 12px; border: 1px solid #e2e8f0; border-radius: 6px; }
+    .btn-primary { background-color: #3182ce; color: white; padding: 10px 20px; border-radius: 6px; border: none; font-weight: 600; cursor: pointer; }
+    .btn-primary:hover { background-color: #2b6cb0; }
+</style>
+
+<div class="container">
+    <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 20px;">
+        <a href="/dashboard" style="text-decoration: none; color: #4a5568;">&larr; {{ locale.back_to_dashboard() }}</a>
+    </div>
+    
+    <h1>{{ locale.api_keys_title() }}</h1>
+    <p style="color: #4a5568; margin-bottom: 30px;">{{ locale.api_keys_subtitle() }}</p>
+
+    {% if let Some(key) = new_key %}
+    <div class="new-key-alert">
+        <strong>{{ locale.api_key_success() }}</strong> {{ locale.api_key_copy_warning() }}
+        <code class="key-display">{{ key }}</code>
+    </div>
+    {% endif %}
+
+    <div class="create-form">
+        <h3 style="margin-top: 0;">{{ locale.create_key_title() }}</h3>
+        <form hx-post="/api-keys" hx-target="body">
+            <div class="form-group">
+                <label for="name">{{ locale.key_name_label() }}</label>
+                <input type="text" id="name" name="name" class="form-control" placeholder="{{ locale.key_name_placeholder() }}" required>
+            </div>
+            <button type="submit" class="btn-primary">{{ locale.generate_key_button() }}</button>
+        </form>
+    </div>
+
+    <div class="api-key-list">
+        {% for key in keys %}
+        <div class="key-row" id="key-{{ key.id }}">
+            <div class="key-info">
+                <span class="key-name">{{ key.name }}</span>
+                <span class="key-date">{{ locale.created_on_label(key.created_at.to_string()[..10]) }}</span>
+            </div>
+            <button class="btn-delete" 
+                    hx-delete="/api-keys/{{ key.id }}" 
+                    hx-target="#key-{{ key.id }}" 
+                    hx-swap="outerHTML" 
+                    hx-confirm="{{ locale.revoke_confirm() }}">
+                {{ locale.revoke_button() }}
+            </button>
+        </div>
+        {% else %}
+        <div style="padding: 40px; text-align: center; color: #718096;">
+            {{ locale.no_keys_found() }}
+        </div>
+        {% endfor %}
+    </div>
+</div>
+{% endblock %}

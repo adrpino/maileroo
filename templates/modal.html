@@ -1,0 +1,24 @@
+<div id="maileroo-modal" class="maileroo-modal-backdrop" hx-on:click="if(event.target == this) this.remove()">
+    <div class="maileroo-modal-content">
+        <div class="maileroo-modal-header">
+            <h3>{{ title }}</h3>
+            <button class="maileroo-modal-close" hx-on:click="document.getElementById('maileroo-modal').remove()">
+                <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+            </button>
+        </div>
+        <div class="maileroo-modal-body">
+            {{ message|safe }}
+        </div>
+        <div class="maileroo-modal-footer">
+            <button class="maileroo-btn" hx-on:click="document.getElementById('maileroo-modal').remove()">{{ cancel_label }}</button>
+            <button class="maileroo-btn maileroo-btn-{{ action_color }}" 
+                    hx-{{ action_method }}="{{ action_url }}" 
+                    hx-target="{{ target }}" 
+                    hx-swap="{{ swap }}"
+                    {% if let Some(inc) = include_target %}hx-include="{{ inc }}"{% endif %}
+                    hx-on:htmx:after-request="if(event.detail.successful) document.getElementById('maileroo-modal').remove()">
+                {{ action_label }}
+            </button>
+        </div>
+    </div>
+</div>

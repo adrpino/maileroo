@@ -1,0 +1,106 @@
+{% extends "base.html" %}
+
+{% block title %}Manage Domains - Maileroo{% endblock %}
+
+{% block content %}
+<style>
+    .container {
+        width: 100%;
+        max-width: 900px;
+    }
+    .domain-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
+    .card { background: white; padding: 20px; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); margin-bottom: 40px; border: 1px solid #eee; }
+    table { width: 100%; border-collapse: collapse; background: white; border-radius: 8px; }
+    th, td { padding: 12px 15px; text-align: left; border-bottom: 1px solid #eee; }
+    th { background: #f8f9fa; font-weight: 600; font-size: 0.85rem; text-transform: uppercase; color: #666; }
+    .badge { padding: 4px 8px; border-radius: 12px; font-size: 0.75rem; font-weight: 600; }
+    .badge-active { background: #e6fffa; color: #2c7a7b; }
+    .form-group { display: flex; gap: 10px; margin-top: 10px; }
+    .form-group input { flex: 1; padding: 10px; border: 1px solid #ddd; border-radius: 4px; }
+    .btn-primary { background: #3182ce; color: white; padding: 10px 20px; border-radius: 4px; cursor: pointer; border: none; font-weight: 500; }
+    .btn-primary:hover { background: #2b6cb0; }
+    .back-link { color: #3182ce; text-decoration: none; font-size: 0.95rem; }
+    .back-link:hover { text-decoration: underline; }
+</style>
+
+<div id="domains-container">
+    <div class="domain-header">
+        <h1>Manage Domains</h1>
+        <a href="/dashboard" class="back-link">&larr; Back to Dashboard</a>
+    </div>
+
+    <div class="card">
+        <h3 style="margin-top: 0;">Add New Domain</h3>
+        <form hx-post="/domains" hx-target="#domain-list" hx-swap="innerHTML" class="form-group">
+            <input type="text" name="domain_name" placeholder="e.g. maileroo.me" required>
+            <button type="submit" class="btn-primary">Add Domain</button>
+        </form>
+    </div>
+
+    <table>
+        <thead>
+            <tr>
+                <th>Domain Name</th>
+                <th>DNS Status</th>
+                <th>Created At</th>
+                <th style="text-align: right;">Actions</th>
+            </tr>
+        </thead>
+        <tbody id="domain-list">
+            {% for d in domains %}
+            <tr id="domain-{{ d.domain.id }}">
+                <td style="font-weight: 500;">{{ d.domain.name }}</td>
+                <td>
+                    <div style="display: flex; align-items: center; gap: 5px; flex-wrap: wrap;">
+                        {% if let Some(status) = d.dns_status %}
+                            <div class="maileroo-tooltip-container">
+                                {% if status.is_ok %}
+                                <span class="badge" style="background: #e6fffa; color: #2c7a7b;">DNS OK</span>
+                                {% else %}
+                                <span class="badge" style="background: #fff5f5; color: #c53030;">DNS Issue</span>
+                                {% endif %}
+                                <div class="maileroo-tooltip-text">
+                                    <strong>MX:</strong> {{ status.mx_status.message }}<br>
+                                    <strong>SPF:</strong> {{ status.spf_status.message }}<br>
+                                    <strong>DMARC:</strong> {{ status.dmarc_status.message }}
+                                </div>
+                            </div>
+                        {% else %}
+                        <span class="badge" style="background: #edf2f7; color: #4a5568;">DNS Unknown</span>
+                        {% endif %}
+
+                        {% if d.domain.dkim_public_key.is_none() %}
+                            <span class="badge" style="background: #fffaf0; border: 1px solid #feebc8; color: #c05621;">⚠️ No DKIM</span>
+                        {% endif %}
+                        {% if d.domain.pending_dkim_public_key.is_some() %}
+                            <span class="badge" style="background: #ebf8ff; border: 1px solid #bee3f8; color: #2b6cb0;">⏳ Rotating</span>
+                        {% endif %}
+                    </div>
+                </td>
+                <td style="color: #666; font-size: 0.9rem;">{{ d.domain.created_at.to_string()[..10] }}</td>
+                <td style="text-align: right;">
+                    <button 
+                        class="maileroo-alias-btn"
+                        style="background: #edf2f7; color: #4a5568; margin-right: 5px;"
+                        hx-get="/domains/{{ d.domain.id }}/dkim-modal"
+                        hx-target="#maileroo-modal-placeholder"
+                        hx-swap="innerHTML"
+                    >
+                        DKIM Settings
+                    </button>
+                    <button 
+                        class="maileroo-alias-btn maileroo-alias-btn-delete"
+                        hx-delete="/domains/{{ d.domain.id }}"
+                        hx-target="#domain-{{ d.domain.id }}"
+                        hx-swap="outerHTML"
+                        hx-confirm="Are you sure you want to delete this domain?"
+                    >
+                        Delete
+                    </button>
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endblock %}
