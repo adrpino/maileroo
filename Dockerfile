@@ -51,7 +51,7 @@ ENV ACME_CACHE_DIR=/app/storage/certs/acme
 ENV DATABASE_URL=sqlite:///app/storage/maileroo.db?mode=rwc
 
 # Labels to automatically link this image to your GitHub repo
-LABEL org.opencontainers.image.source="https://github.com/adrianpino/maileroo"
+LABEL org.opencontainers.image.source="https://github.com/adrpino/maileroo"
 LABEL org.opencontainers.image.description="Self-contained open source secure email server and relay"
 LABEL org.opencontainers.image.licenses="MIT"
 
