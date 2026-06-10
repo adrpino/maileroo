@@ -1,9 +1,9 @@
-use std::path::{Path, PathBuf};
-use std::sync::Arc;
-use uuid::Uuid;
-use time::OffsetDateTime;
 use crate::db::DbPool;
 use crate::outbound::OutboundService;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use time::OffsetDateTime;
+use uuid::Uuid;
 
 /// Resolves the deterministic EML file path inside storage from the job's Uuid
 pub fn get_job_file_path(storage_dir: &Path, job_id: Uuid) -> PathBuf {
@@ -32,7 +32,10 @@ pub async fn enqueue_job(
     if let Err(e) = crate::db::queue::insert_job(pool, id, from_envelope, to_recipient).await {
         // Rollback filesystem if database insert fails
         let _ = tokio::fs::remove_file(&file_path).await;
-        return Err(anyhow::anyhow!("Failed to register queue job in database: {}", e));
+        return Err(anyhow::anyhow!(
+            "Failed to register queue job in database: {}",
+            e
+        ));
     }
 
     Ok(id)
@@ -73,7 +76,9 @@ pub async fn process_queue_tick(
             job.attempts,
             job.last_error.as_deref(),
             job.next_retry_at,
-        ).await {
+        )
+        .await
+        {
             tracing::error!("Failed to acquire lock for queue job {}: {}", job_id, e);
             continue;
         }
@@ -83,7 +88,12 @@ pub async fn process_queue_tick(
         let body_bytes = match tokio::fs::read(&file_path).await {
             Ok(bytes) => bytes,
             Err(e) => {
-                tracing::error!("Orphaned queue job {}: body file missing at {:?} ({})", job_id, file_path, e);
+                tracing::error!(
+                    "Orphaned queue job {}: body file missing at {:?} ({})",
+                    job_id,
+                    file_path,
+                    e
+                );
                 let _ = crate::db::queue::update_job_status(
                     pool,
                     job_id,
@@ -91,14 +101,23 @@ pub async fn process_queue_tick(
                     job.attempts + 1,
                     Some("EML file missing from disk storage"),
                     OffsetDateTime::now_utc() + time::Duration::hours(24),
-                ).await;
+                )
+                .await;
                 continue;
             }
         };
 
         // 3. Retry delivery
-        tracing::info!("Queue job {} delivery attempt {}/{}...", job_id, job.attempts + 1, job.max_attempts);
-        match outbound.send_raw(&job.to_recipient, &job.from_envelope, &body_bytes).await {
+        tracing::info!(
+            "Queue job {} delivery attempt {}/{}...",
+            job_id,
+            job.attempts + 1,
+            job.max_attempts
+        );
+        match outbound
+            .send_raw(&job.to_recipient, &job.from_envelope, &body_bytes)
+            .await
+        {
             Ok(_) => {
                 tracing::info!("Queue job {} successfully delivered!", job_id);
                 let _ = crate::db::queue::delete_job(pool, job_id).await;
@@ -110,7 +129,10 @@ pub async fn process_queue_tick(
                 tracing::warn!("Queue job {} delivery attempt failed: {}", job_id, err_msg);
 
                 if next_attempt >= job.max_attempts {
-                    tracing::error!("Queue job {} has exceeded maximum retries. Marking as permanently failed.", job_id);
+                    tracing::error!(
+                        "Queue job {} has exceeded maximum retries. Marking as permanently failed.",
+                        job_id
+                    );
                     let _ = crate::db::queue::update_job_status(
                         pool,
                         job_id,
@@ -118,7 +140,8 @@ pub async fn process_queue_tick(
                         next_attempt,
                         Some(&err_msg),
                         OffsetDateTime::now_utc() + time::Duration::days(365),
-                    ).await;
+                    )
+                    .await;
                 } else {
                     let next_retry = calculate_next_retry(next_attempt);
                     let _ = crate::db::queue::update_job_status(
@@ -128,7 +151,8 @@ pub async fn process_queue_tick(
                         next_attempt,
                         Some(&err_msg),
                         next_retry,
-                    ).await;
+                    )
+                    .await;
                 }
             }
         }
@@ -212,7 +236,9 @@ mod tests {
         .unwrap();
 
         // Assert DB entry exists by fetching it
-        let jobs = crate::db::queue::fetch_next_retryable_jobs(&db, 10).await.unwrap();
+        let jobs = crate::db::queue::fetch_next_retryable_jobs(&db, 10)
+            .await
+            .unwrap();
         assert_eq!(jobs.len(), 1);
         assert_eq!(jobs[0].id, job_id);
         assert_eq!(jobs[0].status, "pending");
@@ -230,7 +256,9 @@ mod tests {
         tokio::fs::remove_file(&file_path).await.unwrap();
 
         // Assert DB record is completely removed
-        let jobs_after = crate::db::queue::fetch_next_retryable_jobs(&db, 10).await.unwrap();
+        let jobs_after = crate::db::queue::fetch_next_retryable_jobs(&db, 10)
+            .await
+            .unwrap();
         assert!(jobs_after.is_empty());
 
         // Assert file is completely gone from storage

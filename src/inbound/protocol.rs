@@ -1,4 +1,6 @@
-use crate::db::{insert_email, ReplyMappingLookup, get_reply_mapping_by_token, get_or_create_reply_mapping};
+use crate::db::{
+    ReplyMappingLookup, get_or_create_reply_mapping, get_reply_mapping_by_token, insert_email,
+};
 use crate::inbound::acceptor::HotReloadAcceptor;
 use crate::outbound::OutboundService;
 use crate::outbound::mime::prepare_reply_for_relay;
@@ -175,9 +177,7 @@ impl SmartBodyBuffer {
 
     pub fn extract_metadata(&self, envelope_sender: &str) -> Result<EmailMetadata, std::io::Error> {
         match &self.state {
-            BodyBufferState::Memory(vec) => {
-                Ok(SmtpSession::extract_metadata(vec, envelope_sender))
-            }
+            BodyBufferState::Memory(vec) => Ok(SmtpSession::extract_metadata(vec, envelope_sender)),
             BodyBufferState::Disk { temp_file, .. } => {
                 use std::io::Read;
                 let file = temp_file.reopen()?;
@@ -197,7 +197,10 @@ impl SmartBodyBuffer {
                 self.state = BodyBufferState::Memory(vec);
                 Ok(())
             }
-            BodyBufferState::Disk { mut writer, temp_file } => {
+            BodyBufferState::Disk {
+                mut writer,
+                temp_file,
+            } => {
                 std::io::Write::flush(&mut writer)?;
                 temp_file.persist(dest_path).map_err(|e| {
                     std::io::Error::new(
@@ -382,7 +385,8 @@ impl SmtpSession {
                 let full_domain = parts[1];
 
                 if local_part.starts_with("reply-") {
-                    let mapping = match get_reply_mapping_by_token(&self.db_pool, local_part).await {
+                    let mapping = match get_reply_mapping_by_token(&self.db_pool, local_part).await
+                    {
                         Ok(Some(m)) => m,
                         Ok(None) => {
                             tracing::warn!("Unknown or inactive reply token: {}", local_part);
@@ -399,7 +403,8 @@ impl SmtpSession {
                     let sender_addr = match &self.sender {
                         Some(addr) => addr,
                         None => {
-                            self.write_line("503 Bad sequence of commands (MAIL FROM first)").await?;
+                            self.write_line("503 Bad sequence of commands (MAIL FROM first)")
+                                .await?;
                             return Ok(());
                         }
                     };
@@ -418,7 +423,8 @@ impl SmtpSession {
                     let sender_parts: Vec<&str> = sender_addr.split('@').collect();
                     if sender_parts.len() == 2 {
                         let sender_domain = sender_parts[1];
-                        let is_spf_valid = self.outbound.check_spf(sender_domain, self.peer_ip).await;
+                        let is_spf_valid =
+                            self.outbound.check_spf(sender_domain, self.peer_ip).await;
                         if !is_spf_valid {
                             tracing::warn!(
                                 "SPF Validation failed for {} from IP {} claiming to be {}",
@@ -433,7 +439,8 @@ impl SmtpSession {
 
                     self.reply_mapping = Some(mapping);
                     self.state = SmtpState::Data;
-                    self.write_line("250 2.1.5 Destination address accepted").await?;
+                    self.write_line("250 2.1.5 Destination address accepted")
+                        .await?;
                     return Ok(());
                 }
 
@@ -441,7 +448,10 @@ impl SmtpSession {
                     match self.outbound.decode_srs(&addr) {
                         Some(original_sender) => Some(original_sender),
                         None => {
-                            tracing::warn!("Incoming SRS signature validation failed for recipient: {}", addr);
+                            tracing::warn!(
+                                "Incoming SRS signature validation failed for recipient: {}",
+                                addr
+                            );
                             self.write_line("550 User Not Found").await?;
                             return Ok(());
                         }
@@ -450,19 +460,24 @@ impl SmtpSession {
                     None
                 };
 
-                let (resolved_local, resolved_domain) = if let Some(ref original_sender) = decoded_srs {
-                    if let Some(parts) = original_sender.split_once('@') {
-                        parts
+                let (resolved_local, resolved_domain) =
+                    if let Some(ref original_sender) = decoded_srs {
+                        if let Some(parts) = original_sender.split_once('@') {
+                            parts
+                        } else {
+                            self.write_line("550 User Not Found").await?;
+                            return Ok(());
+                        }
                     } else {
-                        self.write_line("550 User Not Found").await?;
-                        return Ok(());
-                    }
-                } else {
-                    (local_part, full_domain)
-                };
+                        (local_part, full_domain)
+                    };
 
-                match crate::db::resolve_recipient_alias(&self.db_pool, resolved_local, resolved_domain)
-                    .await
+                match crate::db::resolve_recipient_alias(
+                    &self.db_pool,
+                    resolved_local,
+                    resolved_domain,
+                )
+                .await
                 {
                     Ok(Some(row)) => {
                         self.alias_id = Some(row.id);
@@ -473,26 +488,42 @@ impl SmtpSession {
                             .await?;
                     }
                     Ok(None) => {
-                        tracing::warn!("No alias found for recipient: {} from IP: {}", addr, self.peer_ip);
-                        
+                        tracing::warn!(
+                            "No alias found for recipient: {} from IP: {}",
+                            addr,
+                            self.peer_ip
+                        );
+
                         let failures = self.rate_limiter.record_failure(self.peer_ip);
-                        
+
                         if failures >= self.limits.block_threshold {
-                            tracing::warn!("IP {} reached block threshold ({}). Adding to blocklist and rejecting.", self.peer_ip, failures);
-                            
+                            tracing::warn!(
+                                "IP {} reached block threshold ({}). Adding to blocklist and rejecting.",
+                                self.peer_ip,
+                                failures
+                            );
+
                             let _ = self.blocklist.add_ip(self.peer_ip);
-                            
-                            self.write_line("554 5.7.1 Connection refused - IP address blocked").await?;
+
+                            self.write_line("554 5.7.1 Connection refused - IP address blocked")
+                                .await?;
                             return Err(std::io::Error::new(
                                 std::io::ErrorKind::ConnectionAborted,
                                 "IP blocked due to excessive failures",
                             ));
                         } else if failures >= self.limits.tarpit_threshold {
-                            tracing::warn!("IP {} exceeded tarpit threshold ({}). Tarpitting and rejecting.", self.peer_ip, failures);
-                            
+                            tracing::warn!(
+                                "IP {} exceeded tarpit threshold ({}). Tarpitting and rejecting.",
+                                self.peer_ip,
+                                failures
+                            );
+
                             // Tarpit the connection using the parameterized duration
-                            tokio::time::sleep(std::time::Duration::from_secs(self.limits.tarpit_duration_secs)).await;
-                            
+                            tokio::time::sleep(std::time::Duration::from_secs(
+                                self.limits.tarpit_duration_secs,
+                            ))
+                            .await;
+
                             self.write_line("451 4.7.1 Please try again later").await?;
                         } else {
                             self.write_line("550 User Not Found").await?;
@@ -535,7 +566,7 @@ impl SmtpSession {
             // Check if this is a reply relay session
             if let Some(ref mapping) = self.reply_mapping {
                 let alias_address = format!("{}@{}", mapping.alias_subdomain, mapping.domain_name);
-                
+
                 // 1. Prepare and sanitize the body for relaying using our modular helper
                 let content_bytes = self.body_buffer.get_content_bytes()?;
                 let clean_body = prepare_reply_for_relay(
@@ -548,14 +579,30 @@ impl SmtpSession {
                 let outbound = self.outbound.clone();
                 let original_sender = mapping.original_sender.clone();
                 let alias_address_clone = alias_address.clone();
-                
+
                 tokio::spawn(async move {
-                    match outbound.send_firsthand(&original_sender, &alias_address_clone, clean_body.as_bytes()).await {
+                    match outbound
+                        .send_firsthand(
+                            &original_sender,
+                            &alias_address_clone,
+                            clean_body.as_bytes(),
+                        )
+                        .await
+                    {
                         Ok(_) => {
-                            tracing::info!("Successfully relayed reply from {} to {}", alias_address_clone, original_sender);
+                            tracing::info!(
+                                "Successfully relayed reply from {} to {}",
+                                alias_address_clone,
+                                original_sender
+                            );
                         }
                         Err(e) => {
-                            tracing::error!("Failed to relay reply from {} to {}: {}", alias_address_clone, original_sender, e);
+                            tracing::error!(
+                                "Failed to relay reply from {} to {}: {}",
+                                alias_address_clone,
+                                original_sender,
+                                e
+                            );
                         }
                     }
                 });
@@ -623,50 +670,50 @@ impl SmtpSession {
                         let sender = metadata.sender.clone();
                         let body = self.body_buffer.get_content_bytes()?;
                         tokio::spawn(async move {
-                            let res = match get_or_create_reply_mapping(&pool, alias_id, &sender).await {
+                            let res = match get_or_create_reply_mapping(&pool, alias_id, &sender)
+                                .await
+                            {
                                 Ok(mapping) => {
                                     outbound
-                                        .send_forward_with_reply_token(&dest, &sender, &mapping.anonymous_token, &body)
+                                        .send_forward_with_reply_token(
+                                            &dest,
+                                            &sender,
+                                            &mapping.anonymous_token,
+                                            &body,
+                                        )
                                         .await
                                 }
                                 Err(e) => {
-                                    tracing::error!("Failed to get or create reply mapping during forwarding, falling back: {}", e);
-                                    outbound
-                                        .send_forward(&dest, &sender, &body)
-                                        .await
+                                    tracing::error!(
+                                        "Failed to get or create reply mapping during forwarding, falling back: {}",
+                                        e
+                                    );
+                                    outbound.send_forward(&dest, &sender, &body).await
                                 }
                             };
 
                             match res {
-                                        Ok(_) => {
-                                            if let Err(e) =
-                                                crate::db::mark_email_as_forwarded(&pool, email_id)
-                                                    .await
-                                            {
-                                                tracing::error!(
-                                                    "Failed to mark email as forwarded: {}",
-                                                    e
-                                                );
-                                            } else {
-                                                // Notify dashboard about the status update
-                                                let _ = tx_clone.send(
-                                                    crate::web::DashboardEvent::EmailForwarded {
-                                                        user_id,
-                                                        email_id,
-                                                    },
-                                                );
-                                            }
-                                        }
-                                        Err(e) => {
-                                            tracing::error!(
-                                                "Failed to forward email to {}: {}",
-                                                dest,
-                                                e
-                                            );
-                                        }
+                                Ok(_) => {
+                                    if let Err(e) =
+                                        crate::db::mark_email_as_forwarded(&pool, email_id).await
+                                    {
+                                        tracing::error!("Failed to mark email as forwarded: {}", e);
+                                    } else {
+                                        // Notify dashboard about the status update
+                                        let _ = tx_clone.send(
+                                            crate::web::DashboardEvent::EmailForwarded {
+                                                user_id,
+                                                email_id,
+                                            },
+                                        );
                                     }
-                                });
+                                }
+                                Err(e) => {
+                                    tracing::error!("Failed to forward email to {}: {}", dest, e);
+                                }
                             }
+                        });
+                    }
                     self.write_line(&format!("250 OK: queued as {}", body_key))
                         .await?;
                 }
@@ -694,7 +741,8 @@ impl SmtpSession {
 
         // If the acceptor exists but the certificate hasn't been written to disk yet
         if acceptor.config().is_none() {
-            self.write_line("454 TLS not available due to temporary reason").await?;
+            self.write_line("454 TLS not available due to temporary reason")
+                .await?;
             return Ok(());
         }
 
@@ -730,9 +778,14 @@ impl SmtpSession {
             Ok(read_result) => read_result, // Read completed, return standard result
             Err(_) => {
                 // Timeout triggered! Write standard SMTP timeout disconnect code
-                tracing::warn!("SMTP client {} idle timeout exceeded, disconnecting", self.peer_ip);
-                let _ = self.write_line("421 4.4.2 Connection timeout. Closing connection.").await;
-                
+                tracing::warn!(
+                    "SMTP client {} idle timeout exceeded, disconnecting",
+                    self.peer_ip
+                );
+                let _ = self
+                    .write_line("421 4.4.2 Connection timeout. Closing connection.")
+                    .await;
+
                 Err(std::io::Error::new(
                     std::io::ErrorKind::TimedOut,
                     "Connection idle timeout exceeded",
@@ -755,7 +808,9 @@ impl SmtpSession {
             if matches!(self.state, SmtpState::ReadingBody) {
                 if let Err(e) = self.handle_body_line(&line).await {
                     if e.kind() == std::io::ErrorKind::OutOfMemory {
-                        let _ = self.write_line("552 5.3.4 Message size exceeds fixed maximum message size").await;
+                        let _ = self
+                            .write_line("552 5.3.4 Message size exceeds fixed maximum message size")
+                            .await;
                     }
                     break;
                 }
@@ -763,7 +818,8 @@ impl SmtpSession {
             }
             line = line.trim().to_string();
             if line.to_uppercase() == "QUIT" {
-                self.write_line("221 2.0.0 Service closing transmission channel").await?;
+                self.write_line("221 2.0.0 Service closing transmission channel")
+                    .await?;
                 break;
             }
             if line.to_uppercase() == "STARTTLS" {
@@ -797,8 +853,8 @@ impl SmtpSession {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::PathBuf;
     use crate::inbound::rate_limit::RateLimiter;
+    use std::path::PathBuf;
     use tokio::io::AsyncWriteExt;
 
     #[test]
@@ -840,7 +896,7 @@ mod tests {
 
         // 1. Normal line is added without dropping anything
         buffer.append("Hello World\r\n").unwrap();
-        
+
         // 2. Stuffed line '..' becomes '.'
         buffer.append("..This stands for dot\r\n").unwrap();
 
@@ -914,7 +970,9 @@ mod tests {
         let mut buffer = SmartBodyBuffer::new(1024); // 1KB threshold
         assert!(matches!(buffer.state, BodyBufferState::Memory(_)));
 
-        buffer.append("Subject: Small Email\r\n\r\nThis stays in RAM!").unwrap();
+        buffer
+            .append("Subject: Small Email\r\n\r\nThis stays in RAM!")
+            .unwrap();
         assert!(matches!(buffer.state, BodyBufferState::Memory(_)));
 
         let metadata = buffer.extract_metadata("sender@test.com").unwrap();
@@ -934,7 +992,9 @@ mod tests {
         assert!(matches!(buffer.state, BodyBufferState::Memory(_)));
 
         // Append 40 more bytes (total 70, triggers promotion to disk!)
-        buffer.append("This is some body text that will go to disk because it is larger.").unwrap();
+        buffer
+            .append("This is some body text that will go to disk because it is larger.")
+            .unwrap();
         assert!(matches!(buffer.state, BodyBufferState::Disk { .. }));
 
         // Persist to temporary final path
@@ -950,8 +1010,10 @@ mod tests {
     #[test]
     fn test_smart_buffer_partial_header_extract() {
         let mut buffer = SmartBodyBuffer::new(10); // force disk immediately
-        buffer.append("From: external@sender.com\r\nSubject: Header Test\r\n\r\n").unwrap();
-        
+        buffer
+            .append("From: external@sender.com\r\nSubject: Header Test\r\n\r\n")
+            .unwrap();
+
         // Append a massive amount of body payload to test that header parsing remains lightweight
         let large_payload = "A".repeat(200 * 1024); // 200KB payload
         buffer.append(&large_payload).unwrap();
@@ -969,8 +1031,10 @@ mod tests {
         let temp_file_path;
         {
             let mut buffer = SmartBodyBuffer::new(10); // force disk
-            buffer.append("From: trigger@cleanup.com\r\n\r\nPayload").unwrap();
-            
+            buffer
+                .append("From: trigger@cleanup.com\r\n\r\nPayload")
+                .unwrap();
+
             if let BodyBufferState::Disk { temp_file, .. } = &buffer.state {
                 temp_file_path = temp_file.path().to_path_buf();
                 assert!(temp_file_path.exists());
@@ -1003,12 +1067,21 @@ mod tests {
         // Setup mock SMTP session
         let (tx, _) = tokio::sync::broadcast::channel(10);
         let rate_limiter = Arc::new(RateLimiter::new());
-        let db = crate::db::DbPool::Sqlite(sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap());
+        let db =
+            crate::db::DbPool::Sqlite(sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap());
         let temp_dir = tempfile::tempdir().unwrap();
-        let tls_acceptor = HotReloadAcceptor::new(PathBuf::from("certs/smtp_cert.pem"), PathBuf::from("certs/smtp_key.pem"), std::time::Duration::from_millis(100)).unwrap();
+        let tls_acceptor = HotReloadAcceptor::new(
+            PathBuf::from("certs/smtp_cert.pem"),
+            PathBuf::from("certs/smtp_key.pem"),
+            std::time::Duration::from_millis(100),
+        )
+        .unwrap();
         let outbound = Arc::new(OutboundService::new(
             "secret".to_string(),
-            hickory_resolver::TokioResolver::builder_tokio().unwrap().build().unwrap(),
+            hickory_resolver::TokioResolver::builder_tokio()
+                .unwrap()
+                .build()
+                .unwrap(),
             "example.com".to_string(),
             db.clone(),
             temp_dir.path().to_path_buf(),
@@ -1037,7 +1110,7 @@ mod tests {
 
         let mut buf = String::new();
         let n = session.read_line_with_timeout(&mut buf).await.unwrap();
-        
+
         assert_eq!(n, 16);
         assert_eq!(buf, "HELO localhost\r\n");
     }
@@ -1062,12 +1135,21 @@ mod tests {
         // Setup mock SMTP session
         let (tx, _) = tokio::sync::broadcast::channel(10);
         let rate_limiter = Arc::new(RateLimiter::new());
-        let db = crate::db::DbPool::Sqlite(sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap());
+        let db =
+            crate::db::DbPool::Sqlite(sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap());
         let temp_dir = tempfile::tempdir().unwrap();
-        let tls_acceptor = HotReloadAcceptor::new(PathBuf::from("certs/smtp_cert.pem"), PathBuf::from("certs/smtp_key.pem"), std::time::Duration::from_millis(100)).unwrap();
+        let tls_acceptor = HotReloadAcceptor::new(
+            PathBuf::from("certs/smtp_cert.pem"),
+            PathBuf::from("certs/smtp_key.pem"),
+            std::time::Duration::from_millis(100),
+        )
+        .unwrap();
         let outbound = Arc::new(OutboundService::new(
             "secret".to_string(),
-            hickory_resolver::TokioResolver::builder_tokio().unwrap().build().unwrap(),
+            hickory_resolver::TokioResolver::builder_tokio()
+                .unwrap()
+                .build()
+                .unwrap(),
             "example.com".to_string(),
             db.clone(),
             temp_dir.path().to_path_buf(),
@@ -1095,7 +1177,7 @@ mod tests {
         );
 
         let mut buf = String::new();
-        
+
         // Await read_line. It will time out after 100 milliseconds
         let result = session.read_line_with_timeout(&mut buf).await;
 

@@ -44,13 +44,16 @@ pub fn format_message_id(id: &str) -> String {
 /// Otherwise, it generates a simple `text/plain` email.
 pub fn build_mime(email: &MimeEmail) -> String {
     let mut mime = String::new();
-    let now = OffsetDateTime::now_utc().format(&Rfc2822).unwrap_or_default();
+    let now = OffsetDateTime::now_utc()
+        .format(&Rfc2822)
+        .unwrap_or_default();
 
     // 1. Standard Headers (Sanitized to prevent CRLF injection)
     mime.push_str(&format!("From: {}\r\n", sanitize_header(&email.from)));
     mime.push_str(&format!("To: {}\r\n", sanitize_header(&email.to)));
-    
-    let subject = if email.in_reply_to.is_some() && !email.subject.to_lowercase().starts_with("re:") {
+
+    let subject = if email.in_reply_to.is_some() && !email.subject.to_lowercase().starts_with("re:")
+    {
         format!("Re: {}", email.subject)
     } else {
         email.subject.clone()
@@ -63,14 +66,23 @@ pub fn build_mime(email: &MimeEmail) -> String {
         let domain = email.from.split('@').nth(1).unwrap_or("localhost");
         generate_message_id(domain)
     });
-    mime.push_str(&format!("Message-ID: {}\r\n", sanitize_header(&format_message_id(&message_id))));
+    mime.push_str(&format!(
+        "Message-ID: {}\r\n",
+        sanitize_header(&format_message_id(&message_id))
+    ));
 
     // 3. Threading Headers
     if let Some(ref irt) = email.in_reply_to {
-        mime.push_str(&format!("In-Reply-To: {}\r\n", sanitize_header(&format_message_id(irt))));
+        mime.push_str(&format!(
+            "In-Reply-To: {}\r\n",
+            sanitize_header(&format_message_id(irt))
+        ));
     }
     if let Some(ref refs) = email.references {
-        mime.push_str(&format!("References: {}\r\n", sanitize_header(&format_message_id(refs))));
+        mime.push_str(&format!(
+            "References: {}\r\n",
+            sanitize_header(&format_message_id(refs))
+        ));
     }
 
     // 4. Content and Body
@@ -79,10 +91,13 @@ pub fn build_mime(email: &MimeEmail) -> String {
     match &email.html_body {
         Some(html) => {
             let boundary = format!("=_Boundary_{}", Uuid::new_v4().to_string().replace("-", ""));
-            
-            mime.push_str(&format!("Content-Type: multipart/alternative; boundary=\"{}\"\r\n", boundary));
+
+            mime.push_str(&format!(
+                "Content-Type: multipart/alternative; boundary=\"{}\"\r\n",
+                boundary
+            ));
             mime.push_str("\r\n");
-            
+
             // Text Part
             mime.push_str(&format!("--{}\r\n", boundary));
             mime.push_str("Content-Type: text/plain; charset=\"utf-8\"\r\n");
@@ -92,7 +107,7 @@ pub fn build_mime(email: &MimeEmail) -> String {
             if !email.text_body.ends_with("\r\n") {
                 mime.push_str("\r\n");
             }
-            
+
             // HTML Part
             mime.push_str(&format!("--{}\r\n", boundary));
             mime.push_str("Content-Type: text/html; charset=\"utf-8\"\r\n");
@@ -102,7 +117,7 @@ pub fn build_mime(email: &MimeEmail) -> String {
             if !html.ends_with("\r\n") {
                 mime.push_str("\r\n");
             }
-            
+
             mime.push_str(&format!("--{}--\r\n", boundary));
         }
         None => {
@@ -124,18 +139,25 @@ pub fn rewrite_body_for_forward(
     destination_email: &str,
 ) -> String {
     if let Some(message) = mail_parser::MessageParser::default().parse(body) {
-        let original_sender_name = message.from()
+        let original_sender_name = message
+            .from()
             .and_then(|f| f.first())
             .and_then(|a| a.name())
             .unwrap_or(original_sender);
 
-        let display_from = format!("\"{} via Relay\" <{}>", original_sender_name, reply_from_email);
+        let display_from = format!(
+            "\"{} via Relay\" <{}>",
+            original_sender_name, reply_from_email
+        );
 
         let mime_email = MimeEmail {
             from: display_from,
             to: destination_email.to_string(),
             subject: message.subject().unwrap_or("No Subject").to_string(),
-            text_body: message.body_text(0).map(|s| s.to_string()).unwrap_or_default(),
+            text_body: message
+                .body_text(0)
+                .map(|s| s.to_string())
+                .unwrap_or_default(),
             html_body: message.body_html(0).map(|s| s.to_string()),
             message_id: message.message_id().map(|id| id.to_string()),
             in_reply_to: message.in_reply_to().as_text().map(|id| id.to_string()),
@@ -149,13 +171,12 @@ pub fn rewrite_body_for_forward(
 }
 
 /// Prepares and sanitizes a reply email received from Gmail, rewriting headers to look as if it was sent directly from the alias.
-pub fn prepare_reply_for_relay(
-    body: &[u8],
-    alias_address: &str,
-    original_sender: &str,
-) -> String {
+pub fn prepare_reply_for_relay(body: &[u8], alias_address: &str, original_sender: &str) -> String {
     if let Some(message) = mail_parser::MessageParser::default().parse(body) {
-        let text_body = message.body_text(0).map(|s| s.to_string()).unwrap_or_default();
+        let text_body = message
+            .body_text(0)
+            .map(|s| s.to_string())
+            .unwrap_or_default();
         let html_body = message.body_html(0).map(|s| s.to_string());
 
         let mime_email = MimeEmail {
@@ -254,11 +275,8 @@ mod tests {
     #[test]
     fn test_prepare_reply_for_relay() {
         let raw_gmail_reply = b"From: Me <user@gmail.com>\r\nTo: reply-token@domain.com\r\nSubject: Re: Hello World\r\nIn-Reply-To: <orig1@company.com>\r\nReferences: <orig1@company.com>\r\n\r\nI agree completely.";
-        let prepared = prepare_reply_for_relay(
-            raw_gmail_reply,
-            "trash@domain.com",
-            "support@company.com",
-        );
+        let prepared =
+            prepare_reply_for_relay(raw_gmail_reply, "trash@domain.com", "support@company.com");
 
         assert!(prepared.contains("From: trash@domain.com\r\n"));
         assert!(prepared.contains("To: support@company.com\r\n"));

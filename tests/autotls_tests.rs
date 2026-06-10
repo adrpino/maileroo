@@ -1,12 +1,12 @@
 mod common;
 
-use maileroo::web::{AppState, DashboardEvent};
 use maileroo::config::{AppConfig, AutoTlsConfig};
 use maileroo::dns::DnsScanner;
 use maileroo::outbound::OutboundService;
+use maileroo::web::{AppState, DashboardEvent};
 use std::sync::Arc;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
-use tokio::io::{AsyncWriteExt, AsyncReadExt};
 
 #[tokio::test]
 async fn test_e2e_auto_tls_certificate_negotiation() {
@@ -62,11 +62,11 @@ async fn test_e2e_auto_tls_certificate_negotiation() {
         // For the sake of this isolated unit test (which might run without docker compose up),
         // we use a dangerously_accept_any_certs client just to prove the TLS handshake succeeds
         // locally, or we'd load the generated `root_ca.crt` if it exists.
-        
-        // Note: Because Step-CA is external state, we wrap the reqwest call. If Step CA is down 
+
+        // Note: Because Step-CA is external state, we wrap the reqwest call. If Step CA is down
         // (e.g., ran `cargo test` without the dev compose), we just log and skip to prevent CI failure.
         let client = reqwest::Client::builder()
-            .danger_accept_invalid_certs(true) 
+            .danger_accept_invalid_certs(true)
             .build()
             .unwrap();
 
@@ -106,7 +106,10 @@ async fn test_auto_tls_redirection_flow() {
         };
 
         let (tx, _) = tokio::sync::broadcast::channel::<DashboardEvent>(100);
-        let resolver = hickory_resolver::TokioResolver::builder_tokio().unwrap().build().unwrap();
+        let resolver = hickory_resolver::TokioResolver::builder_tokio()
+            .unwrap()
+            .build()
+            .unwrap();
         let dns_scanner = DnsScanner::new(resolver.clone());
         let outbound = Arc::new(OutboundService::new(
             "srs_secret_key_123".to_string(),
@@ -122,7 +125,9 @@ async fn test_auto_tls_redirection_flow() {
             dns_scanner,
             tx,
             outbound,
-            config: AppConfig { auto_tls: Some(auto_tls) },
+            config: AppConfig {
+                auto_tls: Some(auto_tls),
+            },
         };
 
         // 3. Start the Web Server in a background task
@@ -134,24 +139,36 @@ async fn test_auto_tls_redirection_flow() {
         tokio::time::sleep(std::time::Duration::from_millis(500)).await;
 
         // 4. Send a raw HTTP request to the HTTP redirect port
-        let mut stream = TcpStream::connect("127.0.0.1:28080").await.expect("Failed to connect to HTTP redirect port");
-        stream.write_all(b"GET /dashboard HTTP/1.1\r\nHost: 127.0.0.1:28080\r\nConnection: close\r\n\r\n").await.unwrap();
+        let mut stream = TcpStream::connect("127.0.0.1:28080")
+            .await
+            .expect("Failed to connect to HTTP redirect port");
+        stream
+            .write_all(
+                b"GET /dashboard HTTP/1.1\r\nHost: 127.0.0.1:28080\r\nConnection: close\r\n\r\n",
+            )
+            .await
+            .unwrap();
 
         let mut response = String::new();
         stream.read_to_string(&mut response).await.unwrap();
 
         // 5. Assert that the server returned a 301 Redirect to the correct secure URL
         assert!(
-            response.contains("301") || response.contains("308") || response.contains("Moved Permanently"),
-            "Response should contain redirect status: {}", response
+            response.contains("301")
+                || response.contains("308")
+                || response.contains("Moved Permanently"),
+            "Response should contain redirect status: {}",
+            response
         );
         assert!(
-            response.contains("Location: https://test.example.com:28443/dashboard") || 
-            response.contains("location: https://test.example.com:28443/dashboard"),
-            "Response should contain correct redirect location header: {}", response
+            response.contains("Location: https://test.example.com:28443/dashboard")
+                || response.contains("location: https://test.example.com:28443/dashboard"),
+            "Response should contain correct redirect location header: {}",
+            response
         );
 
         // 6. Clean up background server
         server_handle.abort();
-    }).await;
+    })
+    .await;
 }

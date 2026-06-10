@@ -1,6 +1,9 @@
 mod common;
 
-use axum::{body::Body, http::{Request, StatusCode}};
+use axum::{
+    body::Body,
+    http::{Request, StatusCode},
+};
 use maileroo::db::DbPool;
 use maileroo::inbound::acceptor::HotReloadAcceptor;
 use maileroo::inbound::protocol::SmtpSession;
@@ -25,7 +28,7 @@ async fn test_complete_smtp_to_http_dashboard_lifecycle() {
 
         // 3. Create App State
         let (tx, _) = broadcast::channel::<DashboardEvent>(100);
-        
+
         // Generate temporary certificates in the temp_dir instead of hardcoding ./certs
         let cert_path = temp_dir.path().join("smtp_cert.pem");
         let key_path = temp_dir.path().join("smtp_key.pem");
@@ -101,7 +104,7 @@ async fn test_complete_smtp_to_http_dashboard_lifecycle() {
         writer.write_all(b"EHLO sender.com\r\n").await.unwrap();
         writer.flush().await.unwrap();
         let mut reader = BufReader::new(writer);
-        
+
         line.clear();
         reader.read_line(&mut line).await.unwrap();
         assert!(line.starts_with("250"));
@@ -182,7 +185,7 @@ async fn test_complete_smtp_to_http_dashboard_lifecycle() {
         };
 
         assert_eq!(emails.len(), 1);
-        
+
         let (subject, sender_email, message_id) = emails[0].clone();
 
         assert_eq!(subject, Some("Feedback Loop".to_string()));
@@ -214,12 +217,12 @@ async fn test_incoming_srs_bounce_handling() {
 
         // Create App State
         let (tx, _) = broadcast::channel::<DashboardEvent>(100);
-        
+
         let cert_path = temp_dir.path().join("smtp_cert.pem");
         let key_path = temp_dir.path().join("smtp_key.pem");
         common::generate_dummy_certs(&cert_path, &key_path);
         let tls_acceptor = HotReloadAcceptor::new(cert_path, key_path, std::time::Duration::from_millis(100)).unwrap();
-        
+
         let srs_secret = "srs_secret_key_123".to_string();
         let outbound = Arc::new(OutboundService::new(
             srs_secret.clone(),
@@ -261,7 +264,7 @@ async fn test_incoming_srs_bounce_handling() {
 
         // Generate valid SRS address: encoding "hello@example.com" via SRS for forwarding
         let valid_srs = maileroo::outbound::srs::encode_srs("hello@example.com", "example.com", &srs_secret);
-        
+
         // Spawn server accept task
         tokio::spawn(async move {
             let (socket, _) = listener.accept().await.unwrap();
@@ -292,7 +295,7 @@ async fn test_incoming_srs_bounce_handling() {
         writer.write_all(b"EHLO sender.com\r\n").await.unwrap();
         writer.flush().await.unwrap();
         let mut reader = BufReader::new(writer);
-        
+
         line.clear();
         reader.read_line(&mut line).await.unwrap();
         assert!(line.starts_with("250"));
@@ -334,12 +337,12 @@ async fn test_incoming_srs_bounce_handling() {
         let outbound_clone = outbound.clone();
         let tx_clone = tx.clone();
         let rate_limiter_clone = rate_limiter.clone();
-        
+
         let cert_path2 = temp_dir.path().join("smtp_cert2.pem");
         let key_path2 = temp_dir.path().join("smtp_key2.pem");
         common::generate_dummy_certs(&cert_path2, &key_path2);
         let tls_acceptor = HotReloadAcceptor::new(cert_path2, key_path2, std::time::Duration::from_millis(100)).unwrap();
-        
+
         let blocklist_clone = Arc::new(maileroo::inbound::blocklist::Blocklist::new(temp_dir.path().join("blockips2.conf")));
 
         tokio::spawn(async move {
@@ -370,7 +373,7 @@ async fn test_incoming_srs_bounce_handling() {
         writer.write_all(b"EHLO sender.com\r\n").await.unwrap();
         writer.flush().await.unwrap();
         let mut reader = BufReader::new(writer);
-        
+
         line.clear();
         reader.read_line(&mut line).await.unwrap();
         assert!(line.starts_with("250"));

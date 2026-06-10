@@ -87,13 +87,11 @@ pub async fn delete_api_key(
 ) -> Result<(), sqlx::Error> {
     match pool {
         DbPool::Postgres(pool) => {
-            sqlx::query(
-                "DELETE FROM api_keys WHERE id = $1 AND user_id = $2",
-            )
-            .bind(key_id)
-            .bind(user_id)
-            .execute(pool)
-            .await?;
+            sqlx::query("DELETE FROM api_keys WHERE id = $1 AND user_id = $2")
+                .bind(key_id)
+                .bind(user_id)
+                .execute(pool)
+                .await?;
         }
         DbPool::Sqlite(pool) => {
             sqlx::query("DELETE FROM api_keys WHERE id = ? AND user_id = ?")

@@ -1,6 +1,6 @@
-use crate::web::{AdminUser, AppState};
-use crate::web::i18n::{Locale, Messages};
 use crate::db::Domain;
+use crate::web::i18n::{Locale, Messages};
+use crate::web::{AdminUser, AppState};
 use askama::Template;
 use axum::{
     extract::{Path, State},
@@ -170,7 +170,11 @@ pub async fn verify_dkim_handler(
     if status.ok {
         if let Err(e) = promote_pending_dkim(&state.db, domain_id).await {
             tracing::error!("Failed to promote pending DKIM key: {}", e);
-            return (StatusCode::INTERNAL_SERVER_ERROR, "Database promotion error").into_response();
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Database promotion error",
+            )
+                .into_response();
         }
         let updated_domain = match get_domain_by_id(&state.db, domain_id).await {
             Ok(Some(d)) => d,
@@ -200,7 +204,7 @@ pub async fn cancel_dkim_rotation_handler(
     State(state): State<Arc<AppState>>,
     Path(domain_id): Path<Uuid>,
 ) -> impl IntoResponse {
-    use crate::db::{get_domain_by_id, clear_pending_dkim};
+    use crate::db::{clear_pending_dkim, get_domain_by_id};
 
     let domain = match get_domain_by_id(&state.db, domain_id).await {
         Ok(Some(d)) => d,

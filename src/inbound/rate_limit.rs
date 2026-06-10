@@ -51,17 +51,18 @@ impl RateLimiter {
             failures: 0,
             last_seen: Instant::now(),
         });
-        
+
         entry.failures += 1;
         entry.last_seen = Instant::now();
-        
+
         entry.failures
     }
 
     /// Removes entries that haven't been seen within the given max_age.
     pub fn cleanup(&self, max_age: Duration) {
         let now = Instant::now();
-        self.map.retain(|_, entry| now.duration_since(entry.last_seen) < max_age);
+        self.map
+            .retain(|_, entry| now.duration_since(entry.last_seen) < max_age);
     }
 }
 
@@ -74,7 +75,7 @@ mod tests {
     fn test_record_failure_increments() {
         let limiter = RateLimiter::new();
         let ip = IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1));
-        
+
         assert_eq!(limiter.record_failure(ip), 1);
         assert_eq!(limiter.record_failure(ip), 2);
         assert_eq!(limiter.record_failure(ip), 3);
@@ -85,7 +86,7 @@ mod tests {
         let limiter = RateLimiter::new();
         let ip1 = IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1));
         let ip2 = IpAddr::V4(Ipv4Addr::new(127, 0, 0, 2));
-        
+
         assert_eq!(limiter.record_failure(ip1), 1);
         assert_eq!(limiter.record_failure(ip2), 1);
         assert_eq!(limiter.record_failure(ip1), 2);
@@ -95,17 +96,20 @@ mod tests {
     fn test_cleanup_removes_old_entries() {
         let limiter = RateLimiter::new();
         let ip = IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1));
-        
+
         // Directly insert an old entry to simulate time passing
-        limiter.map.insert(ip, RateLimitEntry {
-            failures: 5,
-            last_seen: Instant::now() - Duration::from_secs(4000), // Older than 1 hour (3600s)
-        });
+        limiter.map.insert(
+            ip,
+            RateLimitEntry {
+                failures: 5,
+                last_seen: Instant::now() - Duration::from_secs(4000), // Older than 1 hour (3600s)
+            },
+        );
 
         assert_eq!(limiter.map.len(), 1);
-        
+
         limiter.cleanup(Duration::from_secs(3600));
-        
+
         assert_eq!(limiter.map.len(), 0);
     }
 }

@@ -74,7 +74,11 @@ pub async fn process_reply(
     };
 
     // 4. Send the email
-    let new_message_id = format!("<{}@{}>", uuid::Uuid::new_v4(), state.outbound.identity_domain());
+    let new_message_id = format!(
+        "<{}@{}>",
+        uuid::Uuid::new_v4(),
+        state.outbound.identity_domain()
+    );
 
     if let Err(e) = state
         .outbound

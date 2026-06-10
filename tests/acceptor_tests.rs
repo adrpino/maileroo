@@ -18,20 +18,30 @@ async fn test_hot_reload_acceptor_lazy_loading_and_rejection() {
         let temp_dir = tempfile::tempdir().unwrap();
         let non_existent_cert = temp_dir.path().join("non_existent_cert.pem");
         let non_existent_key = temp_dir.path().join("non_existent_key.pem");
-        let lazy_acceptor = HotReloadAcceptor::new(non_existent_cert.clone(), non_existent_key.clone(), std::time::Duration::from_millis(100)).unwrap();
+        let lazy_acceptor = HotReloadAcceptor::new(
+            non_existent_cert.clone(),
+            non_existent_key.clone(),
+            std::time::Duration::from_millis(100),
+        )
+        .unwrap();
         assert!(lazy_acceptor.config().is_none());
 
         // 2. Setup SmtpSession mock dependencies
         let (tx, _) = broadcast::channel::<DashboardEvent>(100);
         let outbound = Arc::new(OutboundService::new(
             "srs_secret".to_string(),
-            hickory_resolver::TokioResolver::builder_tokio().unwrap().build().unwrap(),
+            hickory_resolver::TokioResolver::builder_tokio()
+                .unwrap()
+                .build()
+                .unwrap(),
             "example.com".to_string(),
             db.clone(),
             temp_dir.path().to_path_buf(),
         ));
         let rate_limiter = Arc::new(RateLimiter::new());
-        let blocklist = Arc::new(maileroo::inbound::blocklist::Blocklist::new(PathBuf::from("dummy.conf")));
+        let blocklist = Arc::new(maileroo::inbound::blocklist::Blocklist::new(PathBuf::from(
+            "dummy.conf",
+        )));
         let limits = maileroo::inbound::rate_limit::InboundLimits::from_env();
 
         // --- Scenario A: STARTTLS with Lazy Loading Acceptor (Returns 454) ---
@@ -67,9 +77,13 @@ async fn test_hot_reload_acceptor_lazy_loading_and_rejection() {
 
         // Run the session handler (it will process the command and drop)
         let _ = session.handle().await;
-        
+
         let client_response = client_handle.await.unwrap();
-        assert!(client_response.starts_with("454"), "Expected 454 TLS temporary error, got: {}", client_response);
+        assert!(
+            client_response.starts_with("454"),
+            "Expected 454 TLS temporary error, got: {}",
+            client_response
+        );
 
         // --- Scenario B: STARTTLS with None Acceptor (Returns 502) ---
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -104,13 +118,17 @@ async fn test_hot_reload_acceptor_lazy_loading_and_rejection() {
 
         let _ = session_no_tls.handle().await;
         let client_response = client_handle.await.unwrap();
-        assert!(client_response.starts_with("502"), "Expected 502 Command not implemented, got: {}", client_response);
+        assert!(
+            client_response.starts_with("502"),
+            "Expected 502 Command not implemented, got: {}",
+            client_response
+        );
 
         // --- Scenario C: The Actual Hot Reload (Certs arrive on disk) ---
-        
-        // 0. macOS APFS/HFS+ has a 1-second granularity for file modification times. 
-        // Because this test runs so fast, generating the cert immediately results in the exact same 
-        // `mtime` as when the watcher was initialized. We sleep for 1.1 seconds to guarantee the 
+
+        // 0. macOS APFS/HFS+ has a 1-second granularity for file modification times.
+        // Because this test runs so fast, generating the cert immediately results in the exact same
+        // `mtime` as when the watcher was initialized. We sleep for 1.1 seconds to guarantee the
         // OS registers a strictly strictly newer timestamp for the file.
         tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
 
@@ -128,7 +146,10 @@ async fn test_hot_reload_acceptor_lazy_loading_and_rejection() {
         }
 
         // 3. Assert the acceptor's internal state successfully hot-swapped!
-        assert!(reloaded, "Acceptor failed to hot reload the certificate from disk within 1 second!");
+        assert!(
+            reloaded,
+            "Acceptor failed to hot reload the certificate from disk within 1 second!"
+        );
 
         // 4. Verify a real client can now complete the STARTTLS handshake
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -167,7 +188,11 @@ async fn test_hot_reload_acceptor_lazy_loading_and_rejection() {
         });
 
         let client_response = client_handle.await.unwrap();
-        assert!(client_response.starts_with("220"), "Expected 220 Ready to start TLS, got: {}", client_response);
-        
-    }).await;
+        assert!(
+            client_response.starts_with("220"),
+            "Expected 220 Ready to start TLS, got: {}",
+            client_response
+        );
+    })
+    .await;
 }

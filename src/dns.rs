@@ -151,7 +151,12 @@ impl DnsScanner {
         }
     }
 
-    pub async fn check_dkim_record(&self, domain: &str, selector: &str, expected_pub_key: &str) -> RecordStatus {
+    pub async fn check_dkim_record(
+        &self,
+        domain: &str,
+        selector: &str,
+        expected_pub_key: &str,
+    ) -> RecordStatus {
         let dkim_domain = format!("{}._domainkey.{}", selector, domain);
         match self.resolver.txt_lookup(dkim_domain).await {
             Ok(lookup) => {
@@ -171,7 +176,8 @@ impl DnsScanner {
                 }
                 RecordStatus {
                     ok: false,
-                    message: "DKIM record found but does not contain the expected public key.".to_string(),
+                    message: "DKIM record found but does not contain the expected public key."
+                        .to_string(),
                     value: None,
                 }
             }
@@ -179,7 +185,7 @@ impl DnsScanner {
                 ok: false,
                 message: format!("DKIM DNS TXT lookup failed: {}", e),
                 value: None,
-            }
+            },
         }
     }
 }
@@ -209,7 +215,11 @@ pub fn parse_spf_record(txt_str: &str) -> Vec<SpfDirective> {
         }
 
         // Strip qualifiers (+, -, ~, ?)
-        let clean_term = if term.starts_with('+') || term.starts_with('-') || term.starts_with('~') || term.starts_with('?') {
+        let clean_term = if term.starts_with('+')
+            || term.starts_with('-')
+            || term.starts_with('~')
+            || term.starts_with('?')
+        {
             &term[1..]
         } else {
             term
@@ -233,7 +243,7 @@ pub fn parse_spf_record(txt_str: &str) -> Vec<SpfDirective> {
 pub fn match_ip_cidr(ip: IpAddr, cidr: &str) -> bool {
     let parts: Vec<&str> = cidr.split('/').collect();
     let cidr_ip_str = parts[0];
-    
+
     let parsed_cidr_ip = match cidr_ip_str.parse::<IpAddr>() {
         Ok(parsed) => parsed,
         Err(_) => return false,
@@ -283,7 +293,11 @@ pub fn match_ip_cidr(ip: IpAddr, cidr: &str) -> bool {
 }
 
 /// Evaluates if the `client_ip` is an authorized sender for the given `domain` under RFC 7208.
-pub async fn check_spf_for_domain(resolver: &TokioResolver, domain: &str, client_ip: IpAddr) -> bool {
+pub async fn check_spf_for_domain(
+    resolver: &TokioResolver,
+    domain: &str,
+    client_ip: IpAddr,
+) -> bool {
     let mut domains_to_check = vec![domain.to_string()];
     let mut checked_domains = std::collections::HashSet::new();
     let mut depth = 0;
@@ -294,7 +308,8 @@ pub async fn check_spf_for_domain(resolver: &TokioResolver, domain: &str, client
         }
         checked_domains.insert(current_domain.clone());
         depth += 1;
-        if depth > 10 { // Prevent infinite DNS loops or DOS attacks
+        if depth > 10 {
+            // Prevent infinite DNS loops or DOS attacks
             break;
         }
 
@@ -351,7 +366,10 @@ mod tests {
         let parsed = parse_spf_record(record);
         assert_eq!(parsed.len(), 2);
         assert_eq!(parsed[0], SpfDirective::Ip4("185.70.40.0/22".to_string()));
-        assert_eq!(parsed[1], SpfDirective::Include("_spf.protonmail.ch".to_string()));
+        assert_eq!(
+            parsed[1],
+            SpfDirective::Include("_spf.protonmail.ch".to_string())
+        );
 
         let record_invalid = "v=spf2 ip4:1.1.1.1";
         assert!(parse_spf_record(record_invalid).is_empty());
@@ -360,7 +378,7 @@ mod tests {
     #[test]
     fn test_match_ip_cidr_ipv4() {
         let ip_exact: IpAddr = "192.168.1.15".parse().unwrap();
-        
+
         // Exact match
         assert!(match_ip_cidr(ip_exact, "192.168.1.15"));
         assert!(match_ip_cidr(ip_exact, "192.168.1.15/32"));
@@ -370,7 +388,7 @@ mod tests {
         assert!(match_ip_cidr(ip_exact, "192.168.1.0/24"));
         assert!(match_ip_cidr(ip_exact, "192.168.0.0/16"));
         assert!(!match_ip_cidr(ip_exact, "192.168.2.0/24"));
-        
+
         // Edge cases (0 prefix)
         assert!(match_ip_cidr(ip_exact, "0.0.0.0/0"));
     }
@@ -401,11 +419,14 @@ mod tests {
             .expect("Failed to build resolver");
 
         // ProtonMail's SPF includes 185.70.40.101 (part of 185.70.40.0/22 via include:_spf.protonmail.ch)
-        let is_valid = check_spf_for_domain(&resolver, "protonmail.ch", "185.70.40.101".parse().unwrap()).await;
+        let is_valid =
+            check_spf_for_domain(&resolver, "protonmail.ch", "185.70.40.101".parse().unwrap())
+                .await;
         assert!(is_valid);
 
         // A fake IP should fail
-        let is_fake_valid = check_spf_for_domain(&resolver, "protonmail.ch", "1.1.1.1".parse().unwrap()).await;
+        let is_fake_valid =
+            check_spf_for_domain(&resolver, "protonmail.ch", "1.1.1.1".parse().unwrap()).await;
         assert!(!is_fake_valid);
     }
 }

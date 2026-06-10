@@ -3,8 +3,8 @@ use axum::Router;
 use rustls_acme::{AcmeConfig, caches::DirCache};
 use std::net::SocketAddr;
 use std::sync::Arc;
-use tokio_stream::StreamExt;
 use tokio_rustls::rustls::ServerConfig;
+use tokio_stream::StreamExt;
 
 /// Helper to resolve the deterministic file path where `rustls-acme` stores
 /// the certificate inside the configured cache directory.
@@ -13,7 +13,7 @@ pub fn resolve_acme_cert_path(
     domain: &str,
     acme_directory: &str,
 ) -> std::path::PathBuf {
-    use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+    use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
     use sha2::{Digest, Sha256};
 
     let mut hasher = Sha256::new();
@@ -31,10 +31,7 @@ pub fn resolve_acme_cert_path(
 /// Runs the native Auto-TLS web server on the configured HTTP and HTTPS ports.
 /// This handles Let's Encrypt HTTP-01 challenges and redirects standard
 /// HTTP requests to HTTPS.
-pub async fn run_auto_tls_web_server(
-    app: Router,
-    auto_tls: &AutoTlsConfig,
-) -> anyhow::Result<()> {
+pub async fn run_auto_tls_web_server(app: Router, auto_tls: &AutoTlsConfig) -> anyhow::Result<()> {
     println!(
         "🔒 Starting Native Auto-TLS for domain {} (HTTP: {}, HTTPS: {})",
         auto_tls.domain, auto_tls.http_port, auto_tls.https_port

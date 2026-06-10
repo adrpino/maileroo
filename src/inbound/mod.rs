@@ -23,13 +23,15 @@ pub async fn run_server(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let listener = TcpListener::bind(addr).await?;
     println!("SMTP server listening on {}", &addr);
-    
+
     let rate_limiter = Arc::new(RateLimiter::new());
     let limits = rate_limit::InboundLimits::from_env();
-    
+
     let blocklist_path = crate::config::get_config("BLOCKIPS_FILE", "blockips.conf");
-    let blocklist = Arc::new(blocklist::Blocklist::new(std::path::PathBuf::from(blocklist_path)));
-    
+    let blocklist = Arc::new(blocklist::Blocklist::new(std::path::PathBuf::from(
+        blocklist_path,
+    )));
+
     let limiter_clone = rate_limiter.clone();
     tokio::spawn(async move {
         loop {
@@ -41,10 +43,13 @@ pub async fn run_server(
     loop {
         let (socket, peer_addr) = listener.accept().await?;
         let peer_ip = peer_addr.ip();
-        
+
         // Immediate block check!
         if blocklist.is_blocked(peer_ip) {
-            tracing::warn!("Connection from blocked IP {} dropped immediately.", peer_ip);
+            tracing::warn!(
+                "Connection from blocked IP {} dropped immediately.",
+                peer_ip
+            );
             continue; // Drop the TCP connection instantly by letting 'socket' go out of scope
         }
 

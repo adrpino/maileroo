@@ -22,13 +22,11 @@ pub async fn insert_reply(
     match pool {
         DbPool::Postgres(pool) => {
             // Update the last_activity_at of the parent email
-            sqlx::query(
-                "UPDATE received_emails SET last_activity_at = $1 WHERE id = $2",
-            )
-            .bind(now)
-            .bind(email_id)
-            .execute(pool)
-            .await?;
+            sqlx::query("UPDATE received_emails SET last_activity_at = $1 WHERE id = $2")
+                .bind(now)
+                .bind(email_id)
+                .execute(pool)
+                .await?;
 
             sqlx::query_as::<_, EmailReply>(
                 r#"INSERT INTO email_replies (id, email_id, body_text, sent_at, message_id)

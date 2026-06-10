@@ -40,8 +40,10 @@ impl HotReloadAcceptor {
             Err(_) => return Ok(None),
         };
 
-        let certs = rustls_pemfile::certs(&mut BufReader::new(cert_file)).collect::<Result<Vec<_>, _>>()?;
-        let key = rustls_pemfile::private_key(&mut BufReader::new(key_file))?.ok_or("No private key found")?;
+        let certs =
+            rustls_pemfile::certs(&mut BufReader::new(cert_file)).collect::<Result<Vec<_>, _>>()?;
+        let key = rustls_pemfile::private_key(&mut BufReader::new(key_file))?
+            .ok_or("No private key found")?;
 
         let config = ServerConfig::builder()
             .with_no_client_auth()
@@ -64,7 +66,11 @@ impl HotReloadAcceptor {
     }
 
     /// Creates a new Reloader and spawns a background task to watch files
-    pub fn new(cert_path: PathBuf, key_path: PathBuf, reload_interval: Duration) -> Result<Self, Box<dyn std::error::Error>> {
+    pub fn new(
+        cert_path: PathBuf,
+        key_path: PathBuf,
+        reload_interval: Duration,
+    ) -> Result<Self, Box<dyn std::error::Error>> {
         // 1. Initial Load (Safe to return None if missing on boot)
         let initial_config = Arc::new(Self::load_config(&cert_path, &key_path)?);
 
@@ -84,8 +90,10 @@ impl HotReloadAcceptor {
                 // Check if file changed on disk
                 if let Ok(metadata) = std::fs::metadata(&cert_path) {
                     if let Ok(modified) = metadata.modified() {
-                        if modified > last_modified || last_modified == std::time::SystemTime::UNIX_EPOCH {
-                            // Update the timestamp immediately so we don't get stuck in a reload loop 
+                        if modified > last_modified
+                            || last_modified == std::time::SystemTime::UNIX_EPOCH
+                        {
+                            // Update the timestamp immediately so we don't get stuck in a reload loop
                             // if the key file is missing or parsing fails.
                             last_modified = modified;
 
@@ -98,7 +106,9 @@ impl HotReloadAcceptor {
                                     println!("✅ Certificate reloaded successfully!");
                                 }
                                 Ok(None) => {
-                                    eprintln!("⚠️ Certificate file changed, but key file is missing or invalid. Waiting for next update.");
+                                    eprintln!(
+                                        "⚠️ Certificate file changed, but key file is missing or invalid. Waiting for next update."
+                                    );
                                 }
                                 Err(e) => eprintln!("❌ Failed to reload certs: {}", e),
                             }

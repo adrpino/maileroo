@@ -1,10 +1,10 @@
 use crate::db::DbPool;
-use time::OffsetDateTime;
-use uuid::Uuid;
 use argon2::{
     Argon2,
     password_hash::{PasswordHasher, SaltString, rand_core::OsRng},
 };
+use time::OffsetDateTime;
+use uuid::Uuid;
 
 #[derive(sqlx::FromRow, Debug, Clone)]
 pub struct User {
@@ -29,14 +29,12 @@ pub async fn update_last_login(
     let now = OffsetDateTime::now_utc();
     match pool {
         DbPool::Postgres(pool) => {
-            sqlx::query(
-                "UPDATE users SET last_login_at = $1, last_login_ip = $2 WHERE id = $3",
-            )
-            .bind(now)
-            .bind(client_ip)
-            .bind(user_id)
-            .execute(pool)
-            .await?;
+            sqlx::query("UPDATE users SET last_login_at = $1, last_login_ip = $2 WHERE id = $3")
+                .bind(now)
+                .bind(client_ip)
+                .bind(user_id)
+                .execute(pool)
+                .await?;
         }
         DbPool::Sqlite(pool) => {
             sqlx::query("UPDATE users SET last_login_at = ?, last_login_ip = ? WHERE id = ?")
@@ -295,7 +293,9 @@ pub async fn seed_admin_on_startup(
         for err in &errors {
             eprintln!("   - {}", err);
         }
-        eprintln!("\nPlease define ADMIN_EMAIL and ADMIN_PASSWORD in your environment or .env file before running Maileroo.");
+        eprintln!(
+            "\nPlease define ADMIN_EMAIL and ADMIN_PASSWORD in your environment or .env file before running Maileroo."
+        );
         std::process::exit(1);
     }
 

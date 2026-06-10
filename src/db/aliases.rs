@@ -1,4 +1,4 @@
-use crate::db::{DbPool, Alias, AliasLookup};
+use crate::db::{Alias, AliasLookup, DbPool};
 use time::OffsetDateTime;
 use uuid::Uuid;
 
@@ -20,7 +20,10 @@ pub async fn get_taken_subdomains(
         }
         DbPool::Sqlite(pool) => {
             let placeholders = vec!["?"; candidates.len()].join(", ");
-            let sql = format!("SELECT subdomain FROM aliases WHERE domain_id = ? AND subdomain IN ({})", placeholders);
+            let sql = format!(
+                "SELECT subdomain FROM aliases WHERE domain_id = ? AND subdomain IN ({})",
+                placeholders
+            );
             let mut q = sqlx::query_scalar::<sqlx::Sqlite, String>(&sql).bind(domain_id);
             for cand in candidates {
                 q = q.bind(cand);
@@ -166,7 +169,7 @@ pub async fn insert_alias(
         DbPool::Sqlite(pool) => {
             let id = Uuid::new_v4();
             let created_at = OffsetDateTime::now_utc();
-            
+
             // 1. Insert the alias
             sqlx::query(
                 r#"
@@ -210,13 +213,11 @@ pub async fn delete_alias_by_id(
 ) -> Result<(), sqlx::Error> {
     match pool {
         DbPool::Postgres(pool) => {
-            sqlx::query(
-                "DELETE FROM aliases WHERE id = $1 AND user_id = $2",
-            )
-            .bind(alias_id)
-            .bind(user_id)
-            .execute(pool)
-            .await?;
+            sqlx::query("DELETE FROM aliases WHERE id = $1 AND user_id = $2")
+                .bind(alias_id)
+                .bind(user_id)
+                .execute(pool)
+                .await?;
             Ok(())
         }
         DbPool::Sqlite(pool) => {
@@ -372,14 +373,12 @@ pub async fn update_alias_auto_forward(
 ) -> Result<(), sqlx::Error> {
     match pool {
         DbPool::Postgres(pool) => {
-            sqlx::query(
-                "UPDATE aliases SET auto_forward = $1 WHERE id = $2 AND user_id = $3",
-            )
-            .bind(auto_forward)
-            .bind(alias_id)
-            .bind(user_id)
-            .execute(pool)
-            .await?;
+            sqlx::query("UPDATE aliases SET auto_forward = $1 WHERE id = $2 AND user_id = $3")
+                .bind(auto_forward)
+                .bind(alias_id)
+                .bind(user_id)
+                .execute(pool)
+                .await?;
             Ok(())
         }
         DbPool::Sqlite(pool) => {

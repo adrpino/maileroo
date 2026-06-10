@@ -1,11 +1,11 @@
-use std::sync::Arc;
-use tokio::net::TcpStream;
-use tokio::io::BufReader;
-use tokio_rustls::TlsConnector;
-use tokio_rustls::rustls::pki_types::ServerName;
-use tokio_rustls::rustls::ClientConfig;
-use tracing::info;
 use base64::Engine;
+use std::sync::Arc;
+use tokio::io::BufReader;
+use tokio::net::TcpStream;
+use tokio_rustls::TlsConnector;
+use tokio_rustls::rustls::ClientConfig;
+use tokio_rustls::rustls::pki_types::ServerName;
+use tracing::info;
 
 use crate::outbound::{AnyStream, OutboundService};
 
@@ -25,7 +25,10 @@ pub async fn send_via_relay(
     from_envelope: &str,
     body: &[u8],
 ) -> anyhow::Result<()> {
-    info!("Routing outbound email via relay: {}:{}", relay_config.host, relay_config.port);
+    info!(
+        "Routing outbound email via relay: {}:{}",
+        relay_config.host, relay_config.port
+    );
 
     // Connect to the SMTP relay
     let stream = TcpStream::connect((&relay_config.host[..], relay_config.port)).await?;
@@ -42,7 +45,8 @@ pub async fn send_via_relay(
         &mut response,
         &format!("EHLO {}", identity_domain),
         false,
-    ).await?;
+    )
+    .await?;
 
     // 3. Upgrade to STARTTLS if supported and using port 587
     let supports_tls = capabilities.iter().any(|c| c.contains("STARTTLS"));
@@ -65,14 +69,17 @@ pub async fn send_via_relay(
                         &mut response,
                         &format!("EHLO {}", identity_domain),
                         false,
-                    ).await?;
+                    )
+                    .await?;
 
                     secure_reader
                 }
                 Err(e) => return Err(anyhow::anyhow!("TLS handshake with relay failed: {}", e)),
             }
         } else {
-            return Err(anyhow::anyhow!("Cannot upgrade: stream is not in a plain TCP state"));
+            return Err(anyhow::anyhow!(
+                "Cannot upgrade: stream is not in a plain TCP state"
+            ));
         }
     } else {
         buf_reader
@@ -83,14 +90,16 @@ pub async fn send_via_relay(
         info!("Authenticating with SMTP relay...");
         // Generate standard AUTH PLAIN payload format: \0username\0password
         let raw_payload = format!("\0{}\0{}", relay_config.user, relay_config.pass);
-        let encoded_payload = base64::engine::general_purpose::STANDARD.encode(raw_payload.as_bytes());
+        let encoded_payload =
+            base64::engine::general_purpose::STANDARD.encode(raw_payload.as_bytes());
 
         OutboundService::send_cmd(
             &mut authenticated_stream,
             &mut response,
             &format!("AUTH PLAIN {}", encoded_payload),
             false,
-        ).await?;
+        )
+        .await?;
         info!("Relay authentication successful!");
     }
 
@@ -102,7 +111,8 @@ pub async fn send_via_relay(
         from_envelope.to_string(),
         to,
         body,
-    ).await?;
+    )
+    .await?;
 
     Ok(())
 }

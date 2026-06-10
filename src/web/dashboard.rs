@@ -109,16 +109,19 @@ pub async fn dashboard_handler(
         .await
         .unwrap_or(0);
 
-        let display_emails = sent_emails.into_iter().map(|email| DisplayEmail {
-            id: email.id,
-            alias_address: email.alias_address,
-            correspondent_email: email.to_address,
-            subject: email.subject,
-            date: email.updated_at,
-            is_sent_folder: true,
-            is_viewed: true,
-            status: Some(email.status),
-        }).collect();
+        let display_emails = sent_emails
+            .into_iter()
+            .map(|email| DisplayEmail {
+                id: email.id,
+                alias_address: email.alias_address,
+                correspondent_email: email.to_address,
+                subject: email.subject,
+                date: email.updated_at,
+                is_sent_folder: true,
+                is_viewed: true,
+                status: Some(email.status),
+            })
+            .collect();
 
         (display_emails, count)
     } else {
@@ -151,16 +154,19 @@ pub async fn dashboard_handler(
             Err(_) => 0,
         };
 
-        let display_emails = inbox_emails.into_iter().map(|email| DisplayEmail {
-            id: email.id,
-            alias_address: email.alias_address.unwrap_or_default(),
-            correspondent_email: email.sender_email,
-            subject: email.subject,
-            date: email.received_at,
-            is_sent_folder: false,
-            is_viewed: email.viewed,
-            status: None,
-        }).collect();
+        let display_emails = inbox_emails
+            .into_iter()
+            .map(|email| DisplayEmail {
+                id: email.id,
+                alias_address: email.alias_address.unwrap_or_default(),
+                correspondent_email: email.sender_email,
+                subject: email.subject,
+                date: email.received_at,
+                is_sent_folder: false,
+                is_viewed: email.viewed,
+                status: None,
+            })
+            .collect();
 
         (display_emails, count)
     };
@@ -456,8 +462,6 @@ pub async fn dashboard_sse_handler(
     response
 }
 
-
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -497,8 +501,8 @@ mod tests {
 
     #[test]
     fn test_display_email_from_sent_email_row() {
-        use crate::db::sent_emails::{SentEmailRow, EmailStatus};
-        
+        use crate::db::sent_emails::{EmailStatus, SentEmailRow};
+
         let sent_row = SentEmailRow {
             id: Uuid::new_v4(),
             user_id: Uuid::new_v4(),

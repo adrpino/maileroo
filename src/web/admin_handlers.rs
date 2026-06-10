@@ -1,11 +1,11 @@
 use crate::web::i18n::{Locale, Messages};
 use crate::web::{AdminUser, AppState};
 use askama::Template;
+use axum::http::StatusCode;
 use axum::{
     extract::State,
     response::{Html, IntoResponse},
 };
-use axum::http::StatusCode;
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -87,9 +87,16 @@ pub async fn toggle_bypass_limit_handler(
     State(state): State<Arc<AppState>>,
     axum::extract::Path(target_user_id): axum::extract::Path<Uuid>,
 ) -> impl IntoResponse {
-    let new_val = match crate::db::users::toggle_bypass_alias_limit(&state.db, target_user_id).await {
+    let new_val = match crate::db::users::toggle_bypass_alias_limit(&state.db, target_user_id).await
+    {
         Ok(v) => v,
-        Err(_) => return (StatusCode::INTERNAL_SERVER_ERROR, "Failed to toggle limit bypass").into_response(),
+        Err(_) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Failed to toggle limit bypass",
+            )
+                .into_response();
+        }
     };
 
     Html(render_toggle_td(
@@ -98,7 +105,8 @@ pub async fn toggle_bypass_limit_handler(
         &format!("/admin/users/{}/bypass_limit", target_user_id),
         locale.status_yes(),
         locale.status_no(),
-    )).into_response()
+    ))
+    .into_response()
 }
 
 pub async fn toggle_disable_autoclean_handler(
@@ -107,9 +115,16 @@ pub async fn toggle_disable_autoclean_handler(
     State(state): State<Arc<AppState>>,
     axum::extract::Path(target_user_id): axum::extract::Path<Uuid>,
 ) -> impl IntoResponse {
-    let new_val = match crate::db::users::toggle_disable_autoclean(&state.db, target_user_id).await {
+    let new_val = match crate::db::users::toggle_disable_autoclean(&state.db, target_user_id).await
+    {
         Ok(v) => v,
-        Err(_) => return (StatusCode::INTERNAL_SERVER_ERROR, "Failed to toggle disable autoclean").into_response(),
+        Err(_) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Failed to toggle disable autoclean",
+            )
+                .into_response();
+        }
     };
 
     Html(render_toggle_td(
@@ -118,7 +133,8 @@ pub async fn toggle_disable_autoclean_handler(
         &format!("/admin/users/{}/disable_autoclean", target_user_id),
         locale.status_yes(),
         locale.status_no(),
-    )).into_response()
+    ))
+    .into_response()
 }
 
 pub async fn toggle_can_send_firsthand_handler(
@@ -127,9 +143,16 @@ pub async fn toggle_can_send_firsthand_handler(
     State(state): State<Arc<AppState>>,
     axum::extract::Path(target_user_id): axum::extract::Path<Uuid>,
 ) -> impl IntoResponse {
-    let new_val = match crate::db::users::toggle_can_send_firsthand(&state.db, target_user_id).await {
+    let new_val = match crate::db::users::toggle_can_send_firsthand(&state.db, target_user_id).await
+    {
         Ok(v) => v,
-        Err(_) => return (StatusCode::INTERNAL_SERVER_ERROR, "Failed to toggle outbound email").into_response(),
+        Err(_) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Failed to toggle outbound email",
+            )
+                .into_response();
+        }
     };
 
     Html(render_toggle_td(
@@ -138,7 +161,8 @@ pub async fn toggle_can_send_firsthand_handler(
         &format!("/admin/users/{}/can_send_firsthand", target_user_id),
         locale.status_yes(),
         locale.status_no(),
-    )).into_response()
+    ))
+    .into_response()
 }
 
 #[cfg(test)]

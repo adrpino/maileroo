@@ -1353,10 +1353,18 @@ impl Messages for Locale {
 
     fn admin_disable_autoclean_tooltip(&self) -> &'static str {
         match self {
-            Locale::En => "Toggle to prevent emails in this account from being automatically deleted based on retention settings.",
-            Locale::Es => "Alternar para evitar que los correos de esta cuenta sean eliminados automáticamente.",
-            Locale::Fr => "Basculer pour empêcher la suppression automatique des emails de ce compte.",
-            Locale::Pt => "Alternar para impedir que os emails desta conta sejam eliminados automaticamente.",
+            Locale::En => {
+                "Toggle to prevent emails in this account from being automatically deleted based on retention settings."
+            }
+            Locale::Es => {
+                "Alternar para evitar que los correos de esta cuenta sean eliminados automáticamente."
+            }
+            Locale::Fr => {
+                "Basculer pour empêcher la suppression automatique des emails de ce compte."
+            }
+            Locale::Pt => {
+                "Alternar para impedir que os emails desta conta sejam eliminados automaticamente."
+            }
         }
     }
 
@@ -1461,10 +1469,18 @@ impl Messages for Locale {
 
     fn dkim_no_key_desc(&self) -> &'static str {
         match self {
-            Locale::En => "This domain was created without DKIM keys. Generating a DKIM key pair is highly recommended to authenticate outgoing emails and ensure high inbox deliverability.",
-            Locale::Es => "Este dominio fue creado sin claves DKIM. Se recomienda encarecidamente generar un par de claves DKIM para autenticar los correos salientes y garantizar una alta entrega en la bandeja de entrada.",
-            Locale::Fr => "Ce domaine a été créé sans clés DKIM. La génération d'une paire de clés DKIM est fortement recommandée pour authentifier les e-mails sortants et garantir une délivrabilité élevée.",
-            Locale::Pt => "Este domínio foi criado sem chaves DKIM. Recomenda-se fortemente a geração de um par de chaves DKIM para autenticar e-mails de saída e garantir uma alta entrega na caixa de entrada.",
+            Locale::En => {
+                "This domain was created without DKIM keys. Generating a DKIM key pair is highly recommended to authenticate outgoing emails and ensure high inbox deliverability."
+            }
+            Locale::Es => {
+                "Este dominio fue creado sin claves DKIM. Se recomienda encarecidamente generar un par de claves DKIM para autenticar los correos salientes y garantizar una alta entrega en la bandeja de entrada."
+            }
+            Locale::Fr => {
+                "Ce domaine a été créé sans clés DKIM. La génération d'une paire de clés DKIM est fortement recommandée pour authentifier les e-mails sortants et garantir une délivrabilité élevée."
+            }
+            Locale::Pt => {
+                "Este domínio foi criado sem chaves DKIM. Recomenda-se fortemente a geração de um par de chaves DKIM para autenticar e-mails de saída e garantir uma alta entrega na caixa de entrada."
+            }
         }
     }
 
@@ -1497,10 +1513,18 @@ impl Messages for Locale {
 
     fn dkim_pending_desc(&self) -> &'static str {
         match self {
-            Locale::En => "To complete key rotation, publish this new TXT record. Old record must remain active in parallel!",
-            Locale::Es => "Para completar la rotación de la clave, publique este nuevo registro TXT. ¡El registro anterior debe permanecer activo en paralelo!",
-            Locale::Fr => "Pour terminer la rotation des clés, publiez ce nouvel enregistrement TXT. L'ancien enregistrement doit rester actif en parallèle !",
-            Locale::Pt => "Para concluir a rotação da chave, publique este novo registo TXT. O registo antigo deve permanecer ativo em paralelo!",
+            Locale::En => {
+                "To complete key rotation, publish this new TXT record. Old record must remain active in parallel!"
+            }
+            Locale::Es => {
+                "Para completar la rotación de la clave, publique este nuevo registro TXT. ¡El registro anterior debe permanecer activo en paralelo!"
+            }
+            Locale::Fr => {
+                "Pour terminer la rotation des clés, publiez ce nouvel enregistrement TXT. L'ancien enregistrement doit rester actif en parallèle !"
+            }
+            Locale::Pt => {
+                "Para concluir a rotação da chave, publique este novo registo TXT. O registo antigo deve permanecer ativo em paralelo!"
+            }
         }
     }
 
@@ -1515,10 +1539,18 @@ impl Messages for Locale {
 
     fn dkim_active_desc(&self) -> &'static str {
         match self {
-            Locale::En => "Publish this TXT record on your domain's DNS management console (e.g. Cloudflare, Route53, GoDaddy):",
-            Locale::Es => "Publique este registro TXT en la consola de administración de DNS de su dominio (por ejemplo, Cloudflare, Route53, GoDaddy):",
-            Locale::Fr => "Publiez cet enregistrement TXT sur la console de gestion DNS de votre domaine (ex. Cloudflare, Route53, GoDaddy) :",
-            Locale::Pt => "Publique este registo TXT na consola de administração de DNS do seu domínio (por exemplo, Cloudflare, Route53, GoDaddy):",
+            Locale::En => {
+                "Publish this TXT record on your domain's DNS management console (e.g. Cloudflare, Route53, GoDaddy):"
+            }
+            Locale::Es => {
+                "Publique este registro TXT en la consola de administración de DNS de su dominio (por ejemplo, Cloudflare, Route53, GoDaddy):"
+            }
+            Locale::Fr => {
+                "Publiez cet enregistrement TXT sur la console de gestion DNS de votre domaine (ex. Cloudflare, Route53, GoDaddy) :"
+            }
+            Locale::Pt => {
+                "Publique este registo TXT na consola de administração de DNS do seu domínio (por exemplo, Cloudflare, Route53, GoDaddy):"
+            }
         }
     }
 
@@ -1533,10 +1565,18 @@ impl Messages for Locale {
 
     fn dkim_rotate_confirm(&self) -> &'static str {
         match self {
-            Locale::En => "Rotating your DKIM key will generate a new key pair and selector. Your current active key will remain active until you verify the new one. Do you want to proceed?",
-            Locale::Es => "Rotar su clave DKIM generará un nuevo par de claves y selector. Su clave activa actual permanecerá activa hasta que verifique la nueva. ¿Desea continuar?",
-            Locale::Fr => "La rotation de votre clé DKIM générera une nouvelle paire de clés et un nouveau sélecteur. Votre clé active actuelle restera active jusqu'à ce que vous vérifiiez la nouvelle. Voulez-vous continuer ?",
-            Locale::Pt => "Rodar a sua chave DKIM irá gerar um novo par de chaves e seletor. A sua chave ativa atual permanecerá ativa até verificar a nova. Deseja continuar?",
+            Locale::En => {
+                "Rotating your DKIM key will generate a new key pair and selector. Your current active key will remain active until you verify the new one. Do you want to proceed?"
+            }
+            Locale::Es => {
+                "Rotar su clave DKIM generará un nuevo par de claves y selector. Su clave activa actual permanecerá activa hasta que verifique la nueva. ¿Desea continuar?"
+            }
+            Locale::Fr => {
+                "La rotation de votre clé DKIM générera une nouvelle paire de clés et un nouveau sélecteur. Votre clé active actuelle restera active jusqu'à ce que vous vérifiiez la nouvelle. Voulez-vous continuer ?"
+            }
+            Locale::Pt => {
+                "Rodar a sua chave DKIM irá gerar um novo par de chaves e seletor. A sua chave ativa atual permanecerá ativa até verificar a nova. Deseja continuar?"
+            }
         }
     }
 
@@ -1578,10 +1618,18 @@ impl Messages for Locale {
 
     fn dkim_ttl_notice(&self) -> &'static str {
         match self {
-            Locale::En => "DNS updates can take time to propagate. If verification fails initially, please check your registrar and try again shortly.",
-            Locale::Es => "Las actualizaciones de DNS pueden tardar en propagarse. Si la verificación falla inicialmente, verifique su proveedor e inténtelo de nuevo en unos minutos.",
-            Locale::Fr => "Les mises à jour DNS peuvent prendre du temps à se propager. Si la vérification échoue initialement, veuillez vérifier votre bureau d'enregistrement et réessayer sous peu.",
-            Locale::Pt => "As atualizações de DNS podem demorar a propagar-se. Se a verificação falhar inicialmente, verifique o seu registador e tente novamente em breve.",
+            Locale::En => {
+                "DNS updates can take time to propagate. If verification fails initially, please check your registrar and try again shortly."
+            }
+            Locale::Es => {
+                "Las actualizaciones de DNS pueden tardar en propagarse. Si la verificación falla inicialmente, verifique su proveedor e inténtelo de nuevo en unos minutos."
+            }
+            Locale::Fr => {
+                "Les mises à jour DNS peuvent prendre du temps à se propager. Si la vérification échoue initialement, veuillez vérifier votre bureau d'enregistrement et réessayer sous peu."
+            }
+            Locale::Pt => {
+                "As atualizações de DNS podem demorar a propagar-se. Se a verificação falhar inicialmente, verifique o seu registador e tente novamente em breve."
+            }
         }
     }
 
@@ -1605,13 +1653,21 @@ impl Messages for Locale {
 
     fn dkim_cancel_confirm(&self) -> &'static str {
         match self {
-            Locale::En => "Are you sure you want to cancel the pending DKIM rotation? Any DNS record you published for this selector will no longer be used.",
-            Locale::Es => "¿Está seguro de que desea cancelar la rotación de DKIM pendiente? Cualquier registro DNS que haya publicado para este selector ya no se utilizará.",
-            Locale::Fr => "Êtes-vous sûr de vouloir annuler la rotation DKIM en attente ? Tout enregistrement DNS que vous avez publié pour ce sélecteur ne sera plus utilisé.",
-            Locale::Pt => "Tem a certeza de que deseja cancelar a rotação de DKIM pendente? Qualquer registo DNS que tenha publicado para este seletor deixará de ser utilizado.",
+            Locale::En => {
+                "Are you sure you want to cancel the pending DKIM rotation? Any DNS record you published for this selector will no longer be used."
+            }
+            Locale::Es => {
+                "¿Está seguro de que desea cancelar la rotación de DKIM pendiente? Cualquier registro DNS que haya publicado para este selector ya no se utilizará."
+            }
+            Locale::Fr => {
+                "Êtes-vous sûr de vouloir annuler la rotation DKIM en attente ? Tout enregistrement DNS que vous avez publié pour ce sélecteur ne sera plus utilisé."
+            }
+            Locale::Pt => {
+                "Tem a certeza de que deseja cancelar a rotação de DKIM pendente? Qualquer registo DNS que tenha publicado para este seletor deixará de ser utilizado."
+            }
         }
     }
-    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1698,16 +1754,18 @@ mod tests {
     #[test]
     fn test_xss_sanitization_in_delete_messages() {
         let locale = Locale::En;
-        
+
         let malicious_alias = "<script>alert('alias')</script>";
         let safe_alias_msg = locale.delete_alias_message(malicious_alias);
         assert!(!safe_alias_msg.contains("<script>"));
-        assert!(safe_alias_msg.contains("&lt;script&gt;alert(&apos;alias&apos;)&lt;&#47;script&gt;"));
+        assert!(
+            safe_alias_msg.contains("&lt;script&gt;alert(&apos;alias&apos;)&lt;&#47;script&gt;")
+        );
 
         let malicious_subject = "<b>Free money</b> & <img src=x onerror=alert(1)>";
         let safe_subject_msg = locale.delete_email_message(malicious_subject);
         assert!(!safe_subject_msg.contains("<b>"));
         assert!(!safe_subject_msg.contains("<img"));
-        assert!(safe_subject_msg.contains("&lt;b&gt;Free&#32;money&lt;&#47;b&gt;&#32;&amp;&#32;&lt;img&#32;src&#61;x&#32;onerror&#61;alert(1)&gt;")); 
+        assert!(safe_subject_msg.contains("&lt;b&gt;Free&#32;money&lt;&#47;b&gt;&#32;&amp;&#32;&lt;img&#32;src&#61;x&#32;onerror&#61;alert(1)&gt;"));
     }
 }

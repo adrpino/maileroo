@@ -12,6 +12,7 @@ pub mod names;
 pub mod replies;
 pub mod send_email;
 
+use crate::db::DbPool;
 use axum::extract::{FromRequestParts, State};
 use axum::{
     Json, Router,
@@ -22,7 +23,6 @@ use axum::{
     routing::{delete, get, post},
 };
 use serde_json::{Value, json};
-use crate::db::DbPool;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use uuid::Uuid;
@@ -193,10 +193,26 @@ where
         validate_csrf_token(&parts.method, header_token, session_token.as_deref())?;
 
         // 1. Try to get user flags from session (Caching)
-        let is_admin = session.get::<bool>("is_admin").await.unwrap_or(Some(false)).unwrap_or(false);
-        let bypass_alias_limit = session.get::<bool>("bypass_alias_limit").await.unwrap_or(Some(false)).unwrap_or(false);
-        let can_send_firsthand = session.get::<bool>("can_send_firsthand").await.unwrap_or(Some(false)).unwrap_or(false);
-        let data_loaded = session.get::<bool>("user_data_loaded").await.unwrap_or(Some(false)).unwrap_or(false);
+        let is_admin = session
+            .get::<bool>("is_admin")
+            .await
+            .unwrap_or(Some(false))
+            .unwrap_or(false);
+        let bypass_alias_limit = session
+            .get::<bool>("bypass_alias_limit")
+            .await
+            .unwrap_or(Some(false))
+            .unwrap_or(false);
+        let can_send_firsthand = session
+            .get::<bool>("can_send_firsthand")
+            .await
+            .unwrap_or(Some(false))
+            .unwrap_or(false);
+        let data_loaded = session
+            .get::<bool>("user_data_loaded")
+            .await
+            .unwrap_or(Some(false))
+            .unwrap_or(false);
 
         let (is_admin, bypass_alias_limit, can_send_firsthand) = if !data_loaded {
             // 2. Fallback to DB if not cached or session is incomplete
@@ -209,15 +225,28 @@ where
 
             // 3. Cache it back in session for next time
             let _ = session.insert("is_admin", user.is_admin).await;
-            let _ = session.insert("bypass_alias_limit", user.bypass_alias_limit).await;
-            let _ = session.insert("can_send_firsthand", user.can_send_firsthand).await;
+            let _ = session
+                .insert("bypass_alias_limit", user.bypass_alias_limit)
+                .await;
+            let _ = session
+                .insert("can_send_firsthand", user.can_send_firsthand)
+                .await;
             let _ = session.insert("user_data_loaded", true).await;
-            (user.is_admin, user.bypass_alias_limit, user.can_send_firsthand)
+            (
+                user.is_admin,
+                user.bypass_alias_limit,
+                user.can_send_firsthand,
+            )
         } else {
             (is_admin, bypass_alias_limit, can_send_firsthand)
         };
 
-        Ok(AuthenticatedUser { user_id, is_admin, bypass_alias_limit, can_send_firsthand })
+        Ok(AuthenticatedUser {
+            user_id,
+            is_admin,
+            bypass_alias_limit,
+            can_send_firsthand,
+        })
     }
 }
 
@@ -358,7 +387,9 @@ pub async fn create_app(state: AppState) -> Router {
     let cookie_domain = crate::config::get_config("COOKIE_DOMAIN", "");
     let secure_cookies = crate::config::get_config("SECURE_COOKIES", "true") == "true";
 
-    use tower_governor::{GovernorLayer, governor::GovernorConfigBuilder, key_extractor::SmartIpKeyExtractor};
+    use tower_governor::{
+        GovernorLayer, governor::GovernorConfigBuilder, key_extractor::SmartIpKeyExtractor,
+    };
     let governor_conf = Arc::new(
         GovernorConfigBuilder::default()
             .per_second(2)
@@ -418,7 +449,10 @@ pub async fn create_app(state: AppState) -> Router {
         .route("/domains/{id}", delete(handlers::delete_domain_handler))
         .route("/domains/{id}/rotate-dkim", post(dkim::rotate_dkim_handler))
         .route("/domains/{id}/verify-dkim", post(dkim::verify_dkim_handler))
-        .route("/domains/{id}/cancel-dkim-rotation", post(dkim::cancel_dkim_rotation_handler))
+        .route(
+            "/domains/{id}/cancel-dkim-rotation",
+            post(dkim::cancel_dkim_rotation_handler),
+        )
         .route("/domains/{id}/dkim-modal", get(dkim::dkim_modal_handler))
         .route("/admin/users", get(admin_handlers::admin_users_handler))
         .route(
@@ -500,8 +534,7 @@ pub async fn create_app(state: AppState) -> Router {
         }
     };
 
-    app.layer(logging_layer)
-       .with_state(Arc::new(state))
+    app.layer(logging_layer).with_state(Arc::new(state))
 }
 
 pub async fn run_web_server(
@@ -515,7 +548,11 @@ pub async fn run_web_server(
         autotls::run_auto_tls_web_server(app, auto_tls).await?;
     } else if let Some(acceptor) = tls_acceptor {
         // 1. Wrap the config
-        let config = RustlsConfig::from_config(acceptor.config().expect("Manual TLS mode requires active certificates on boot"));
+        let config = RustlsConfig::from_config(
+            acceptor
+                .config()
+                .expect("Manual TLS mode requires active certificates on boot"),
+        );
 
         // 2. Explicitly parse the address
         let socket_addr: SocketAddr = addr.parse()?;
@@ -577,7 +614,7 @@ async fn get_email(
             return Response::builder()
                 .status(StatusCode::NOT_FOUND)
                 .body(Body::from("Email not found"))
-                .unwrap()
+                .unwrap();
         }
         Err(e) => {
             tracing::error!("Error reading email: {}", e);
@@ -662,11 +699,8 @@ async fn get_email(
                     let sender = email.alias_address;
                     let recipient = email.to_address;
                     let subject = email.subject;
-                    let date = email
-                        .sent_at
-                        .unwrap_or(email.created_at)
-                        .to_string()[..16]
-                        .to_string();
+                    let date =
+                        email.sent_at.unwrap_or(email.created_at).to_string()[..16].to_string();
 
                     // Prefer HTML body, fall back to text
                     let raw_body = message
@@ -924,16 +958,36 @@ mod tests {
 
     #[test]
     fn test_can_bypass_alias_limit() {
-        let u1 = AuthenticatedUser { user_id: uuid::Uuid::new_v4(), is_admin: false, bypass_alias_limit: false, can_send_firsthand: false };
+        let u1 = AuthenticatedUser {
+            user_id: uuid::Uuid::new_v4(),
+            is_admin: false,
+            bypass_alias_limit: false,
+            can_send_firsthand: false,
+        };
         assert!(!u1.can_bypass_alias_limit());
 
-        let u2 = AuthenticatedUser { user_id: uuid::Uuid::new_v4(), is_admin: true, bypass_alias_limit: false, can_send_firsthand: false };
+        let u2 = AuthenticatedUser {
+            user_id: uuid::Uuid::new_v4(),
+            is_admin: true,
+            bypass_alias_limit: false,
+            can_send_firsthand: false,
+        };
         assert!(u2.can_bypass_alias_limit());
 
-        let u3 = AuthenticatedUser { user_id: uuid::Uuid::new_v4(), is_admin: false, bypass_alias_limit: true, can_send_firsthand: false };
+        let u3 = AuthenticatedUser {
+            user_id: uuid::Uuid::new_v4(),
+            is_admin: false,
+            bypass_alias_limit: true,
+            can_send_firsthand: false,
+        };
         assert!(u3.can_bypass_alias_limit());
 
-        let u4 = AuthenticatedUser { user_id: uuid::Uuid::new_v4(), is_admin: true, bypass_alias_limit: true, can_send_firsthand: false };
+        let u4 = AuthenticatedUser {
+            user_id: uuid::Uuid::new_v4(),
+            is_admin: true,
+            bypass_alias_limit: true,
+            can_send_firsthand: false,
+        };
         assert!(u4.can_bypass_alias_limit());
     }
 }

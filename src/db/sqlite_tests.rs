@@ -1,13 +1,13 @@
 #[cfg(test)]
 mod tests {
     use crate::db::{
-        DbPool, insert_domain,
-        aliases::{insert_alias, get_taken_subdomains, resolve_recipient_alias},
-        users::{insert_user, get_user_by_id, update_last_login},
-        api_keys::{insert_api_key, get_api_keys},
-        sent_emails::{insert_sent_email, get_sent_emails_by_user_id, EmailStatus},
+        DbPool,
+        aliases::{get_taken_subdomains, insert_alias, resolve_recipient_alias},
+        api_keys::{get_api_keys, insert_api_key},
+        find_thread_id_by_references, get_child_emails, insert_domain, insert_email,
         reply_mappings::{get_or_create_reply_mapping, get_reply_mapping_by_token},
-        insert_email, find_thread_id_by_references, get_child_emails,
+        sent_emails::{EmailStatus, get_sent_emails_by_user_id, insert_sent_email},
+        users::{get_user_by_id, insert_user, update_last_login},
     };
     use sqlx::SqlitePool;
     use uuid::Uuid;
@@ -31,7 +31,7 @@ mod tests {
         let user = insert_user(&db, "developer@example.com", "my_secure_hash")
             .await
             .expect("Failed to insert user");
-        
+
         assert_eq!(user.email, "developer@example.com");
         assert!(!user.is_admin);
 
@@ -40,7 +40,9 @@ mod tests {
         assert_eq!(fetched.id, user.id);
 
         // 3. Update last login
-        update_last_login(&db, user.id, Some("127.0.0.1".to_string())).await.unwrap();
+        update_last_login(&db, user.id, Some("127.0.0.1".to_string()))
+            .await
+            .unwrap();
 
         // 4. Insert Api Key
         let api_key = insert_api_key(&db, user.id, "some_key_hash", "Admin Token")
@@ -59,7 +61,9 @@ mod tests {
         let db = setup_sqlite_in_memory_db().await;
 
         // Insert user
-        let user = insert_user(&db, "test@suggestions.com", "hash").await.unwrap();
+        let user = insert_user(&db, "test@suggestions.com", "hash")
+            .await
+            .unwrap();
 
         // Insert domain
         let domain = insert_domain(&db, &"suggestions-domain.com".to_string())
@@ -67,22 +71,35 @@ mod tests {
             .unwrap();
 
         // Insert some aliases
-        let alias1 = insert_alias(&db, user.id, domain.id, "support", "dest1@gmail.com", true).await.unwrap();
-        let _alias2 = insert_alias(&db, user.id, domain.id, "billing", "dest2@gmail.com", true).await.unwrap();
+        let alias1 = insert_alias(&db, user.id, domain.id, "support", "dest1@gmail.com", true)
+            .await
+            .unwrap();
+        let _alias2 = insert_alias(&db, user.id, domain.id, "billing", "dest2@gmail.com", true)
+            .await
+            .unwrap();
 
         assert_eq!(alias1.subdomain, "support");
         assert_eq!(alias1.domain_name, "suggestions-domain.com");
 
         // Check taken subdomains
-        let candidates = vec!["support".to_string(), "billing".to_string(), "sales".to_string()];
-        let taken = get_taken_subdomains(&db, domain.id, &candidates).await.unwrap();
+        let candidates = vec![
+            "support".to_string(),
+            "billing".to_string(),
+            "sales".to_string(),
+        ];
+        let taken = get_taken_subdomains(&db, domain.id, &candidates)
+            .await
+            .unwrap();
         assert_eq!(taken.len(), 2);
         assert!(taken.contains(&"support".to_string()));
         assert!(taken.contains(&"billing".to_string()));
         assert!(!taken.contains(&"sales".to_string()));
 
         // Resolve alias
-        let lookup = resolve_recipient_alias(&db, "support", "suggestions-domain.com").await.unwrap().unwrap();
+        let lookup = resolve_recipient_alias(&db, "support", "suggestions-domain.com")
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(lookup.destination_email, "dest1@gmail.com");
     }
 
@@ -91,13 +108,17 @@ mod tests {
         let db = setup_sqlite_in_memory_db().await;
 
         // Setup basic records
-        let user = insert_user(&db, "forwarder@test.com", "hash").await.unwrap();
+        let user = insert_user(&db, "forwarder@test.com", "hash")
+            .await
+            .unwrap();
 
         let domain = insert_domain(&db, &"forward-domain.com".to_string())
             .await
             .unwrap();
 
-        let alias = insert_alias(&db, user.id, domain.id, "hello", "user@gmail.com", true).await.unwrap();
+        let alias = insert_alias(&db, user.id, domain.id, "hello", "user@gmail.com", true)
+            .await
+            .unwrap();
 
         // Insert sent email draft
         let body_key = Uuid::new_v4();
@@ -118,21 +139,17 @@ mod tests {
         assert_eq!(sent_email.status, EmailStatus::Draft);
 
         // List sent emails by user
-        let sent_emails_list = get_sent_emails_by_user_id(
-            &db,
-            user.id,
-            EmailStatus::Draft,
-            10,
-            0,
-            None,
-            None,
-        )
-        .await
-        .unwrap();
+        let sent_emails_list =
+            get_sent_emails_by_user_id(&db, user.id, EmailStatus::Draft, 10, 0, None, None)
+                .await
+                .unwrap();
 
         assert_eq!(sent_emails_list.len(), 1);
         assert_eq!(sent_emails_list[0].id, sent_email.id);
-        assert_eq!(sent_emails_list[0].alias_address, "hello@forward-domain.com");
+        assert_eq!(
+            sent_emails_list[0].alias_address,
+            "hello@forward-domain.com"
+        );
     }
 
     #[tokio::test]
@@ -145,23 +162,32 @@ mod tests {
             .await
             .unwrap();
 
-        let alias = insert_alias(&db, user.id, domain.id, "replier", "user@gmail.com", true).await.unwrap();
+        let alias = insert_alias(&db, user.id, domain.id, "replier", "user@gmail.com", true)
+            .await
+            .unwrap();
 
         let sender = "customer@external.com";
 
         // 1. Create mapping
-        let map1 = get_or_create_reply_mapping(&db, alias.id, sender).await.unwrap();
+        let map1 = get_or_create_reply_mapping(&db, alias.id, sender)
+            .await
+            .unwrap();
         assert_eq!(map1.alias_id, alias.id);
         assert_eq!(map1.original_sender, sender);
         assert!(map1.anonymous_token.starts_with("reply-"));
 
         // 2. Fetch existing mapping
-        let map2 = get_or_create_reply_mapping(&db, alias.id, sender).await.unwrap();
+        let map2 = get_or_create_reply_mapping(&db, alias.id, sender)
+            .await
+            .unwrap();
         assert_eq!(map1.id, map2.id);
         assert_eq!(map1.anonymous_token, map2.anonymous_token);
 
         // 3. Lookup by token
-        let lookup = get_reply_mapping_by_token(&db, &map1.anonymous_token).await.unwrap().unwrap();
+        let lookup = get_reply_mapping_by_token(&db, &map1.anonymous_token)
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(lookup.id, map1.id);
         assert_eq!(lookup.original_sender, sender);
         assert_eq!(lookup.destination_email, "user@gmail.com");
@@ -177,7 +203,9 @@ mod tests {
             .await
             .unwrap();
 
-        let alias = insert_alias(&db, user.id, domain.id, "threading", "user@gmail.com", true).await.unwrap();
+        let alias = insert_alias(&db, user.id, domain.id, "threading", "user@gmail.com", true)
+            .await
+            .unwrap();
 
         // 1. Insert root email
         let root_msg_id = "<root-msg-123@external.com>";
@@ -210,12 +238,12 @@ mod tests {
         .unwrap();
 
         // Test resolving thread ID by references
-        let references = vec![
-            "non-existent-msg-id".to_string(),
-            root_msg_id.to_string(),
-        ];
+        let references = vec!["non-existent-msg-id".to_string(), root_msg_id.to_string()];
 
-        let found_id = find_thread_id_by_references(&db, &references).await.unwrap().unwrap();
+        let found_id = find_thread_id_by_references(&db, &references)
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(found_id, root_email.id);
 
         // Fetch children
