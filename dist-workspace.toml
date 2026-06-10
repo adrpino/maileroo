@@ -13,3 +13,6 @@ installers = ["shell", "powershell"]
 targets = ["aarch64-apple-darwin", "x86_64-apple-darwin", "x86_64-unknown-linux-gnu", "x86_64-pc-windows-msvc"]
 # Repository URL for links and installers
 repository = "https://github.com/adrpino/maileroo"
+# Keep the hand-edited release.yml (--target removed to avoid the
+# 'workflows: write' 403); don't fail when CI differs from the template.
+allow-dirty = ["ci"]
