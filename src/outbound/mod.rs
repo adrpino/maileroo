@@ -1,11 +1,13 @@
-pub mod mime;
-pub mod srs;
-pub mod relay;
 pub mod dkim;
+pub mod mime;
 pub mod queue;
+pub mod relay;
+pub mod srs;
 
 pub use dkim::generate_dkim_key_pair;
-pub use queue::{get_job_file_path, enqueue_job, calculate_next_retry, process_queue_tick, start_queue_daemon};
+pub use queue::{
+    calculate_next_retry, enqueue_job, get_job_file_path, process_queue_tick, start_queue_daemon,
+};
 
 use crate::dns::check_spf_for_domain;
 use crate::outbound::mime::{MimeEmail, build_mime, rewrite_body_for_forward};
@@ -149,14 +151,10 @@ impl OutboundService {
     }
 
     /// Primary function to forward an email directly to the recipient's mail server
-    pub async fn send_forward(
-        &self,
-        to: &str,
-        from: &str,
-        body: &[u8],
-    ) -> anyhow::Result<()> {
+    pub async fn send_forward(&self, to: &str, from: &str, body: &[u8]) -> anyhow::Result<()> {
         // Rewrite the 'from' address using SRS
-        let srs_from = crate::outbound::srs::encode_srs(from, &self.identity_domain, &self.srs_secret);
+        let srs_from =
+            crate::outbound::srs::encode_srs(from, &self.identity_domain, &self.srs_secret);
         self.send_raw(to, &srs_from, body).await
     }
 
@@ -170,7 +168,11 @@ impl OutboundService {
     ) -> anyhow::Result<()> {
         // 1. Rewrite the envelope sender using SRS of the reply email address
         let reply_from_email = format!("{}@{}", reply_token, self.identity_domain);
-        let srs_from = crate::outbound::srs::encode_srs(&reply_from_email, &self.identity_domain, &self.srs_secret);
+        let srs_from = crate::outbound::srs::encode_srs(
+            &reply_from_email,
+            &self.identity_domain,
+            &self.srs_secret,
+        );
 
         // 2. Rewrite the headers of the MIME body using our pure modular helper
         let clean_body = rewrite_body_for_forward(body, from, &reply_from_email, to);
@@ -180,12 +182,7 @@ impl OutboundService {
     }
 
     /// Primary function to send a direct outbound email to a recipient
-    pub async fn send_firsthand(
-        &self,
-        to: &str,
-        from: &str,
-        body: &[u8],
-    ) -> anyhow::Result<()> {
+    pub async fn send_firsthand(&self, to: &str, from: &str, body: &[u8]) -> anyhow::Result<()> {
         self.send_raw(to, from, body).await
     }
 
@@ -213,14 +210,19 @@ impl OutboundService {
                     || err_str.contains("Command contains invalid characters");
 
                 if !is_permanent {
-                    tracing::warn!("Transient delivery failure, automatically queuing for retry: {}", err_str);
+                    tracing::warn!(
+                        "Transient delivery failure, automatically queuing for retry: {}",
+                        err_str
+                    );
                     if let Err(enqueue_err) = crate::outbound::queue::enqueue_job(
                         &self.db,
                         &self.storage_dir,
                         from_envelope,
                         to,
                         body,
-                    ).await {
+                    )
+                    .await
+                    {
                         tracing::error!("Failed to enqueue failed delivery job: {}", enqueue_err);
                         return Err(e);
                     }
@@ -240,8 +242,13 @@ impl OutboundService {
         from_envelope: &str,
         body: &[u8],
     ) -> anyhow::Result<()> {
-        let sender_domain = from_envelope.split('@').nth(1).unwrap_or("").trim().to_lowercase();
-        
+        let sender_domain = from_envelope
+            .split('@')
+            .nth(1)
+            .unwrap_or("")
+            .trim()
+            .to_lowercase();
+
         let dkim_info = crate::db::get_dkim_key_by_domain(&self.db, &sender_domain)
             .await
             .ok()
@@ -293,7 +300,8 @@ impl OutboundService {
                 to,
                 from_envelope,
                 body,
-            ).await;
+            )
+            .await;
         }
 
         let domain = to
@@ -320,7 +328,10 @@ impl OutboundService {
 
         let host = best_mx.exchange.to_utf8();
         let clean_host = host.trim_end_matches('.').to_string();
-        info!("Found best MX for {}: {} (pref: {})", domain, clean_host, best_mx.preference);
+        info!(
+            "Found best MX for {}: {} (pref: {})",
+            domain, clean_host, best_mx.preference
+        );
 
         // 2. Connect via IPv4 ONLY (To satisfy Gmail/strict SPF/PTR guidelines)
         info!("Enforcing IPv4 lookup for MX: {}", clean_host);
@@ -337,7 +348,8 @@ impl OutboundService {
                 })
                 .next(),
             Err(_) => None,
-        }.ok_or_else(|| anyhow::anyhow!("Could not resolve IPv4 for MX {}", clean_host))?;
+        }
+        .ok_or_else(|| anyhow::anyhow!("Could not resolve IPv4 for MX {}", clean_host))?;
 
         info!("Connecting via IPv4 to {}:25 ({})...", ip_addr, clean_host);
         let stream = TcpStream::connect((ip_addr, 25)).await?;
@@ -354,7 +366,8 @@ impl OutboundService {
             &mut response,
             &format!("EHLO {}", self.identity_domain),
             false,
-        ).await?;
+        )
+        .await?;
 
         // 4. Opportunistic TLS (STARTTLS)
         let supports_tls = capabilities.iter().any(|c| c.contains("STARTTLS"));
@@ -377,7 +390,8 @@ impl OutboundService {
                             &mut response,
                             &format!("EHLO {}", self.identity_domain),
                             false,
-                        ).await?;
+                        )
+                        .await?;
 
                         Self::send_mail_flow(
                             &mut buf_reader,
@@ -386,7 +400,8 @@ impl OutboundService {
                             from_envelope.to_string(),
                             to,
                             body,
-                        ).await?;
+                        )
+                        .await?;
                     }
                     Err(e) => return Err(anyhow::anyhow!("TLS connection failed: {}", e)),
                 }
@@ -399,7 +414,8 @@ impl OutboundService {
                 from_envelope.to_string(),
                 to,
                 body,
-            ).await?;
+            )
+            .await?;
         }
 
         Ok(())
@@ -416,10 +432,22 @@ impl OutboundService {
         let supports_pipelining = capabilities.iter().any(|c| c.contains("PIPELINING"));
 
         // MAIL FROM
-        Self::send_cmd(reader, response, &format!("MAIL FROM:<{}>", srs_from), false).await?;
+        Self::send_cmd(
+            reader,
+            response,
+            &format!("MAIL FROM:<{}>", srs_from),
+            false,
+        )
+        .await?;
 
         // RCPT TO
-        Self::send_cmd(reader, response, &format!("RCPT TO:<{}>", to), !supports_pipelining).await?;
+        Self::send_cmd(
+            reader,
+            response,
+            &format!("RCPT TO:<{}>", to),
+            !supports_pipelining,
+        )
+        .await?;
 
         // DATA
         Self::send_cmd(reader, response, "DATA", !supports_pipelining).await?;
@@ -476,10 +504,14 @@ impl OutboundService {
         loop {
             response.clear();
             let n = reader.read_line(response).await?;
-            if n == 0 { return Err(anyhow::anyhow!("Connection closed unexpectedly")); }
+            if n == 0 {
+                return Err(anyhow::anyhow!("Connection closed unexpectedly"));
+            }
             let trimmed = response.trim();
             lines.push(trimmed.to_string());
-            if response.len() < 4 || response.as_bytes()[3] != b'-' { break; }
+            if response.len() < 4 || response.as_bytes()[3] != b'-' {
+                break;
+            }
         }
         Ok(lines)
     }
@@ -493,7 +525,9 @@ impl OutboundService {
         if cmd.contains('\r') || cmd.contains('\n') {
             return Err(anyhow::anyhow!("Command contains invalid characters"));
         }
-        if delay { tokio::time::sleep(std::time::Duration::from_millis(100)).await; }
+        if delay {
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        }
         let full_cmd = format!("{}\r\n", cmd);
         let writer = reader.get_mut();
         writer.write_all(full_cmd.as_bytes()).await?;
@@ -501,7 +535,11 @@ impl OutboundService {
         let lines = Self::read_full_response(reader, response).await?;
         let last_line = lines.last().unwrap();
         if !last_line.starts_with('2') && !last_line.starts_with('3') {
-            return Err(anyhow::anyhow!("SMTP Error for command '{}': {}", cmd, lines.join("\n")));
+            return Err(anyhow::anyhow!(
+                "SMTP Error for command '{}': {}",
+                cmd,
+                lines.join("\n")
+            ));
         }
         Ok(lines)
     }
@@ -510,8 +548,8 @@ impl OutboundService {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tokio::net::TcpListener;
     use tokio::io::AsyncWriteExt;
+    use tokio::net::TcpListener;
 
     #[tokio::test]
     async fn test_outbound_relay_protocol_flow() {
@@ -526,7 +564,11 @@ mod tests {
             let mut buf = String::new();
 
             // S1: Greeting
-            reader.get_mut().write_all(b"220 smtp.mockrelay.com Welcome\r\n").await.unwrap();
+            reader
+                .get_mut()
+                .write_all(b"220 smtp.mockrelay.com Welcome\r\n")
+                .await
+                .unwrap();
 
             // C2: Read EHLO
             buf.clear();
@@ -534,7 +576,11 @@ mod tests {
             assert!(buf.starts_with("EHLO"));
 
             // S2: Capabilities response
-            reader.get_mut().write_all(b"250-smtp.mockrelay.com\r\n250 AUTH PLAIN\r\n").await.unwrap();
+            reader
+                .get_mut()
+                .write_all(b"250-smtp.mockrelay.com\r\n250 AUTH PLAIN\r\n")
+                .await
+                .unwrap();
 
             // C3: Read AUTH PLAIN
             buf.clear();
@@ -542,7 +588,11 @@ mod tests {
             assert!(buf.contains("AUTH PLAIN"));
 
             // S3: Auth OK
-            reader.get_mut().write_all(b"235 Authentication successful\r\n").await.unwrap();
+            reader
+                .get_mut()
+                .write_all(b"235 Authentication successful\r\n")
+                .await
+                .unwrap();
 
             // C4: MAIL FROM
             buf.clear();
@@ -560,7 +610,11 @@ mod tests {
             buf.clear();
             reader.read_line(&mut buf).await.unwrap();
             assert!(buf.contains("DATA"));
-            reader.get_mut().write_all(b"354 Start input\r\n").await.unwrap();
+            reader
+                .get_mut()
+                .write_all(b"354 Start input\r\n")
+                .await
+                .unwrap();
 
             // C7: Body + dot
             loop {
@@ -570,7 +624,11 @@ mod tests {
                     break;
                 }
             }
-            reader.get_mut().write_all(b"250 OK Queued\r\n").await.unwrap();
+            reader
+                .get_mut()
+                .write_all(b"250 OK Queued\r\n")
+                .await
+                .unwrap();
 
             // C8: QUIT
             buf.clear();
@@ -594,7 +652,7 @@ mod tests {
         let client_config = Arc::new(
             ClientConfig::builder()
                 .with_root_certificates(root_store)
-                .with_no_client_auth()
+                .with_no_client_auth(),
         );
 
         // 3. Invoke relay sender
@@ -605,7 +663,8 @@ mod tests {
             "receiver@domain.com",
             "sender@example.com",
             b"Subject: Hello Relay\r\n\r\nThis is the body.",
-        ).await;
+        )
+        .await;
 
         // 4. Assert client exited successfully
         assert!(res.is_ok(), "Relay protocol sender failed: {:?}", res.err());

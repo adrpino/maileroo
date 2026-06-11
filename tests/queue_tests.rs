@@ -1,12 +1,12 @@
 mod common;
 
+use maileroo::db::DbPool;
 use maileroo::outbound::{OutboundService, process_queue_tick};
 use std::sync::Arc;
 use tempfile::tempdir;
+use time::OffsetDateTime;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpListener;
-use time::OffsetDateTime;
-use maileroo::db::DbPool;
 
 #[tokio::test]
 async fn test_outbound_queue_retry_lifecycle_e2e() {
@@ -50,7 +50,7 @@ async fn test_outbound_queue_retry_lifecycle_e2e() {
 
         tracing::info!("Sending email to trigger transient fallback queueing...");
         let send_result = outbound.send_firsthand(rcpt, sender, body_bytes).await;
-        
+
         // The wrapper intercepts the transient failure, enqueues the job, and returns Ok(())
         assert!(send_result.is_ok());
 
@@ -78,7 +78,7 @@ async fn test_outbound_queue_retry_lifecycle_e2e() {
         // 6. Assert job is registered in outbound_queue table
         let queued_jobs = maileroo::db::queue::fetch_next_retryable_jobs(&db, 10).await.unwrap();
         assert_eq!(queued_jobs.len(), 1, "There should be exactly 1 queued job after transient delivery failure");
-        
+
         let job = &queued_jobs[0];
         assert_eq!(job.from_envelope, sender);
         assert_eq!(job.to_recipient, rcpt);
@@ -212,18 +212,30 @@ async fn test_outbound_queue_daemon_periodic_delivery_e2e() {
             let mut buf = String::new();
 
             // S: Greeting
-            reader.get_mut().write_all(b"220 smtp.mockrelay.com\r\n").await.unwrap();
+            reader
+                .get_mut()
+                .write_all(b"220 smtp.mockrelay.com\r\n")
+                .await
+                .unwrap();
 
             // C: EHLO
             reader.read_line(&mut buf).await.unwrap();
             assert!(buf.contains("EHLO"));
-            reader.get_mut().write_all(b"250-smtp.mockrelay.com\r\n250 AUTH PLAIN\r\n").await.unwrap();
+            reader
+                .get_mut()
+                .write_all(b"250-smtp.mockrelay.com\r\n250 AUTH PLAIN\r\n")
+                .await
+                .unwrap();
 
             // C: AUTH PLAIN
             buf.clear();
             reader.read_line(&mut buf).await.unwrap();
             assert!(buf.contains("AUTH PLAIN"));
-            reader.get_mut().write_all(b"235 Auth successful\r\n").await.unwrap();
+            reader
+                .get_mut()
+                .write_all(b"235 Auth successful\r\n")
+                .await
+                .unwrap();
 
             // C: MAIL FROM
             buf.clear();
@@ -241,7 +253,11 @@ async fn test_outbound_queue_daemon_periodic_delivery_e2e() {
             buf.clear();
             reader.read_line(&mut buf).await.unwrap();
             assert!(buf.contains("DATA"));
-            reader.get_mut().write_all(b"354 Start input\r\n").await.unwrap();
+            reader
+                .get_mut()
+                .write_all(b"354 Start input\r\n")
+                .await
+                .unwrap();
 
             // C: Body lines until dot
             loop {
@@ -251,29 +267,43 @@ async fn test_outbound_queue_daemon_periodic_delivery_e2e() {
                     break;
                 }
             }
-            reader.get_mut().write_all(b"250 Message accepted for delivery\r\n").await.unwrap();
+            reader
+                .get_mut()
+                .write_all(b"250 Message accepted for delivery\r\n")
+                .await
+                .unwrap();
 
             // C: QUIT
             buf.clear();
             reader.read_line(&mut buf).await.unwrap();
             assert!(buf.starts_with("QUIT"));
-            reader.get_mut().write_all(b"221 Goodbye\r\n").await.unwrap();
+            reader
+                .get_mut()
+                .write_all(b"221 Goodbye\r\n")
+                .await
+                .unwrap();
         });
 
         // 4. Create an OutboundService instance with direct RelayConfig override
-        let resolver = hickory_resolver::TokioResolver::builder_tokio().unwrap().build().unwrap();
-        let outbound = Arc::new(OutboundService::new(
-            srs_secret.clone(),
-            resolver.clone(),
-            identity_domain.clone(),
-            db.clone(),
-            temp_storage_dir.path().to_path_buf(),
-        ).with_relay_override(maileroo::outbound::relay::RelayConfig {
-            host: "127.0.0.1".to_string(),
-            port,
-            user: "api".to_string(),
-            pass: "test-auth-token".to_string(),
-        }));
+        let resolver = hickory_resolver::TokioResolver::builder_tokio()
+            .unwrap()
+            .build()
+            .unwrap();
+        let outbound = Arc::new(
+            OutboundService::new(
+                srs_secret.clone(),
+                resolver.clone(),
+                identity_domain.clone(),
+                db.clone(),
+                temp_storage_dir.path().to_path_buf(),
+            )
+            .with_relay_override(maileroo::outbound::relay::RelayConfig {
+                host: "127.0.0.1".to_string(),
+                port,
+                user: "api".to_string(),
+                pass: "test-auth-token".to_string(),
+            }),
+        );
 
         // 5. Manually insert a queued job directly into the database (representing a previous transient failure)
         let job_id = uuid::Uuid::new_v4();
@@ -283,11 +313,15 @@ async fn test_outbound_queue_daemon_periodic_delivery_e2e() {
 
         // Save physical file first to match the storage constraint
         let eml_file = maileroo::outbound::get_job_file_path(temp_storage_dir.path(), job_id);
-        tokio::fs::create_dir_all(eml_file.parent().unwrap()).await.unwrap();
+        tokio::fs::create_dir_all(eml_file.parent().unwrap())
+            .await
+            .unwrap();
         tokio::fs::write(&eml_file, body_bytes).await.unwrap();
 
         // Insert database record
-        maileroo::db::queue::insert_job(&db, job_id, from_envelope, to_recipient).await.unwrap();
+        maileroo::db::queue::insert_job(&db, job_id, from_envelope, to_recipient)
+            .await
+            .unwrap();
 
         // Ensure next_retry_at is in the past to make it eligible immediately
         maileroo::db::queue::update_job_status(
@@ -312,9 +346,12 @@ async fn test_outbound_queue_daemon_periodic_delivery_e2e() {
 
         // 7. Wait and poll database until the job is processed and cleared
         let mut job_processed = false;
-        for _ in 0..100 { // Max 2 seconds timeout (100 * 20ms)
+        for _ in 0..100 {
+            // Max 2 seconds timeout (100 * 20ms)
             tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-            let queued_jobs = maileroo::db::queue::fetch_next_retryable_jobs(&db, 10).await.unwrap();
+            let queued_jobs = maileroo::db::queue::fetch_next_retryable_jobs(&db, 10)
+                .await
+                .unwrap();
             if queued_jobs.is_empty() {
                 // If it is gone, we also check if the file is gone
                 if !eml_file.exists() {
@@ -324,9 +361,13 @@ async fn test_outbound_queue_daemon_periodic_delivery_e2e() {
             }
         }
 
-        assert!(job_processed, "Queue daemon failed to pick up, process, and clean up the retry job within timeout");
+        assert!(
+            job_processed,
+            "Queue daemon failed to pick up, process, and clean up the retry job within timeout"
+        );
 
         // Wait for the mock SMTP server handle to join/complete successfully
         server_handle.await.unwrap();
-    }).await;
+    })
+    .await;
 }

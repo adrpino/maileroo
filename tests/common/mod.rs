@@ -1,9 +1,14 @@
 #![allow(dead_code)]
 
-use maileroo::db::{DbPool, aliases::insert_alias, users::insert_user, sent_emails::{insert_sent_email, EmailStatus, SentEmail}};
-use sqlx::{SqlitePool, PgPool};
-use uuid::Uuid;
+use maileroo::db::{
+    DbPool,
+    aliases::insert_alias,
+    sent_emails::{EmailStatus, SentEmail, insert_sent_email},
+    users::insert_user,
+};
+use sqlx::{PgPool, SqlitePool};
 use std::future::Future;
+use uuid::Uuid;
 
 static CRYPTO_INIT: std::sync::Once = std::sync::Once::new();
 
@@ -31,8 +36,12 @@ pub async fn setup_sqlite_in_memory_db() -> DbPool {
 }
 
 fn get_admin_and_unique_db_urls(base_test_url: &str) -> (String, String, String) {
-    let (schema, rest) = base_test_url.split_once("://").expect("Invalid TEST_DATABASE_URL format");
-    let (host_part, path_and_query) = rest.split_once('/').expect("Invalid TEST_DATABASE_URL format");
+    let (schema, rest) = base_test_url
+        .split_once("://")
+        .expect("Invalid TEST_DATABASE_URL format");
+    let (host_part, path_and_query) = rest
+        .split_once('/')
+        .expect("Invalid TEST_DATABASE_URL format");
     let (db_name, query_params) = match path_and_query.split_once('?') {
         Some((db, query)) => (db, format!("?{}", query)),
         None => (path_and_query, String::new()),
@@ -41,7 +50,10 @@ fn get_admin_and_unique_db_urls(base_test_url: &str) -> (String, String, String)
     let unique_id = Uuid::new_v4().simple().to_string();
     let unique_db_name = format!("{}_{}", db_name, unique_id);
     let admin_url = format!("{}://{}/postgres{}", schema, host_part, query_params);
-    let unique_db_url = format!("{}://{}/{}{}", schema, host_part, unique_db_name, query_params);
+    let unique_db_url = format!(
+        "{}://{}/{}{}",
+        schema, host_part, unique_db_name, query_params
+    );
 
     (admin_url, unique_db_name, unique_db_url)
 }
@@ -69,7 +81,10 @@ where
             // Connect to default administrative database to create our unique isolated test database
             let admin_pool = PgPool::connect(&admin_url).await.unwrap();
             let create_query = format!("CREATE DATABASE {};", db_name);
-            sqlx::query(&create_query).execute(&admin_pool).await.unwrap();
+            sqlx::query(&create_query)
+                .execute(&admin_pool)
+                .await
+                .unwrap();
             admin_pool.close().await;
 
             // Connect to the unique test database and run migrations
@@ -79,7 +94,9 @@ where
 
             // Run the test logic catching any panics to guarantee cleanup
             use futures_util::FutureExt;
-            let test_result = std::panic::AssertUnwindSafe(test_fn(db)).catch_unwind().await;
+            let test_result = std::panic::AssertUnwindSafe(test_fn(db))
+                .catch_unwind()
+                .await;
 
             // Explicitly close the connection pool so that Postgres releases any locks before dropping
             unique_pool.close().await;
@@ -99,7 +116,11 @@ where
 }
 
 /// Helper to create a test user with a password hashed using Argon2.
-pub async fn create_test_user(db: &DbPool, email: &str, cleartext_password: &str) -> maileroo::db::users::User {
+pub async fn create_test_user(
+    db: &DbPool,
+    email: &str,
+    cleartext_password: &str,
+) -> maileroo::db::users::User {
     let hash = maileroo::web::auth::hash_password(cleartext_password).unwrap();
     insert_user(db, email, &hash).await.unwrap()
 }
@@ -132,7 +153,9 @@ pub async fn create_test_alias(
                 .unwrap();
         }
     }
-    insert_alias(db, user_id, domain_id, subdomain, destination_email, true).await.unwrap()
+    insert_alias(db, user_id, domain_id, subdomain, destination_email, true)
+        .await
+        .unwrap()
 }
 
 /// Helper to insert a draft/sent outbound email into the database.
@@ -146,14 +169,7 @@ pub async fn create_test_draft(
 ) -> SentEmail {
     let body_key = Uuid::new_v4();
     insert_sent_email(
-        db,
-        user_id,
-        alias_id,
-        to_address,
-        subject,
-        body_key,
-        status,
-        None,
+        db, user_id, alias_id, to_address, subject, body_key, status, None,
     )
     .await
     .unwrap()
@@ -162,8 +178,8 @@ pub async fn create_test_draft(
 /// Helper to authenticate a user via HTTP and retrieve the set-cookie header session string.
 pub async fn get_auth_cookie(app: axum::Router, email: &str, password_cleartext: &str) -> String {
     use axum::body::Body;
-    use axum::http::{Request, header};
     use axum::extract::ConnectInfo;
+    use axum::http::{Request, header};
     use std::net::SocketAddr;
     use tower::ServiceExt;
 
@@ -173,25 +189,30 @@ pub async fn get_auth_cookie(app: axum::Router, email: &str, password_cleartext:
         .uri("/login")
         .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
         .extension(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 12345))))
-        .body(Body::from(format!("email={}&password={}", email, password_cleartext)))
+        .body(Body::from(format!(
+            "email={}&password={}",
+            email, password_cleartext
+        )))
         .unwrap();
 
     let res = app.oneshot(req).await.unwrap();
 
     // Extract all set-cookie header values (e.g. csrf_token and session id) and merge them
-    let cookies: Vec<String> = res.headers()
+    let cookies: Vec<String> = res
+        .headers()
         .get_all(header::SET_COOKIE)
         .iter()
-        .map(|v| {
-            v.to_str().unwrap().split(';').next().unwrap().to_string()
-        })
+        .map(|v| v.to_str().unwrap().split(';').next().unwrap().to_string())
         .collect();
 
     let cookie_header = cookies.join("; ");
-    
+
     println!("DEBUG LOGIN COOKIE HEADER FOR CLIENT: {:?}", cookie_header);
 
-    assert!(!cookie_header.is_empty(), "Login did not return any Set-Cookie headers");
+    assert!(
+        !cookie_header.is_empty(),
+        "Login did not return any Set-Cookie headers"
+    );
     cookie_header
 }
 
@@ -211,12 +232,18 @@ pub fn extract_csrf_token(cookie_header: &str) -> String {
 pub async fn email_exists_in_db(db: &DbPool, id: Uuid) -> bool {
     let query_str = "SELECT 1 FROM sent_emails WHERE id = $1";
     match db {
-        DbPool::Postgres(p) => {
-            sqlx::query(query_str).bind(id).fetch_optional(p).await.unwrap().is_some()
-        }
-        DbPool::Sqlite(p) => {
-            sqlx::query(query_str).bind(id).fetch_optional(p).await.unwrap().is_some()
-        }
+        DbPool::Postgres(p) => sqlx::query(query_str)
+            .bind(id)
+            .fetch_optional(p)
+            .await
+            .unwrap()
+            .is_some(),
+        DbPool::Sqlite(p) => sqlx::query(query_str)
+            .bind(id)
+            .fetch_optional(p)
+            .await
+            .unwrap()
+            .is_some(),
     }
 }
 
@@ -225,10 +252,18 @@ pub async fn grant_user_sender_permissions(db: &DbPool, user_id: Uuid) {
     let query_str = "UPDATE users SET can_send_firsthand = true, is_admin = true WHERE id = $1";
     match db {
         DbPool::Postgres(p) => {
-            sqlx::query(query_str).bind(user_id).execute(p).await.unwrap();
+            sqlx::query(query_str)
+                .bind(user_id)
+                .execute(p)
+                .await
+                .unwrap();
         }
         DbPool::Sqlite(p) => {
-            sqlx::query(query_str).bind(user_id).execute(p).await.unwrap();
+            sqlx::query(query_str)
+                .bind(user_id)
+                .execute(p)
+                .await
+                .unwrap();
         }
     }
 }

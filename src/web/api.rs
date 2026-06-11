@@ -37,16 +37,12 @@ pub async fn list_emails_handler(
         Err(_) => return (StatusCode::INTERNAL_SERVER_ERROR, "Database error").into_response(),
     };
 
-    let total_emails = match get_email_count_by_user_id(
-        &state.db,
-        user.user.id,
-        alias_filter,
-        pagination.q,
-    )
-    .await {
-        Ok(count) => count,
-        Err(_) => 0,
-    };
+    let total_emails =
+        match get_email_count_by_user_id(&state.db, user.user.id, alias_filter, pagination.q).await
+        {
+            Ok(count) => count,
+            Err(_) => 0,
+        };
 
     let total_pages = (total_emails as f64 / page_size as f64).ceil() as i64;
 

@@ -20,12 +20,7 @@ pub struct QueueJob {
     pub created_at: OffsetDateTime,
 }
 
-pub async fn insert_job(
-    pool: &DbPool,
-    id: Uuid,
-    from: &str,
-    to: &str,
-) -> Result<(), sqlx::Error> {
+pub async fn insert_job(pool: &DbPool, id: Uuid, from: &str, to: &str) -> Result<(), sqlx::Error> {
     let now = OffsetDateTime::now_utc();
     match pool {
         DbPool::Postgres(pool) => {
@@ -149,10 +144,7 @@ pub async fn update_job_status(
     Ok(())
 }
 
-pub async fn delete_job(
-    pool: &DbPool,
-    id: Uuid,
-) -> Result<(), sqlx::Error> {
+pub async fn delete_job(pool: &DbPool, id: Uuid) -> Result<(), sqlx::Error> {
     match pool {
         DbPool::Postgres(pool) => {
             sqlx::query(

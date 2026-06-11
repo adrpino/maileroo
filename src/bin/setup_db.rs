@@ -3,7 +3,7 @@ use argon2::{
     password_hash::{PasswordHasher, SaltString, rand_core::OsRng},
 };
 use dotenvy::dotenv;
-use maileroo::db::{init_pool, run_migrations, DbPool};
+use maileroo::db::{DbPool, init_pool, run_migrations};
 use std::env;
 use uuid::Uuid;
 
@@ -90,7 +90,8 @@ async fn seed_data(pool: &DbPool) -> Result<(), Box<dyn std::error::Error>> {
     let domain_name = "maileroo.test";
 
     let insert_domain = "INSERT INTO domains (id, name, active) VALUES ($1, $2, true) ON CONFLICT (name) DO NOTHING";
-    let insert_domain_sqlite = "INSERT INTO domains (id, name, active) VALUES (?, ?, 1) ON CONFLICT (name) DO NOTHING";
+    let insert_domain_sqlite =
+        "INSERT INTO domains (id, name, active) VALUES (?, ?, 1) ON CONFLICT (name) DO NOTHING";
 
     match pool {
         DbPool::Postgres(p) => {
@@ -259,6 +260,9 @@ async fn seed_data(pool: &DbPool) -> Result<(), Box<dyn std::error::Error>> {
     );
     tokio::fs::write(&file_path, messy_content).await?;
 
-    println!("✨ Seeded admin user: {} with password: {}", email, password);
+    println!(
+        "✨ Seeded admin user: {} with password: {}",
+        email, password
+    );
     Ok(())
 }

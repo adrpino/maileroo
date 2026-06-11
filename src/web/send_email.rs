@@ -4,14 +4,14 @@ use crate::web::i18n::{Locale, Messages};
 use crate::web::{AppState, FirsthandSenderUser};
 use askama::Template;
 use axum::{
-    extract::{Form, State, Query},
+    extract::{Form, Query, State},
     http::StatusCode,
     response::IntoResponse,
 };
 use serde::Deserialize;
 use std::sync::Arc;
-use uuid::Uuid;
 use tokio::fs;
+use uuid::Uuid;
 
 #[derive(Template)]
 #[template(path = "compose_modal.html")]
@@ -52,11 +52,7 @@ pub async fn compose_modal_handler(
     let aliases = match crate::db::get_aliases_by_user_id(&state.db, user.0.user_id).await {
         Ok(aliases) => aliases,
         Err(_) => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "Failed to fetch aliases",
-            )
-                .into_response();
+            return (StatusCode::INTERNAL_SERVER_ERROR, "Failed to fetch aliases").into_response();
         }
     };
 
@@ -67,12 +63,15 @@ pub async fn compose_modal_handler(
     let mut selected_alias_id = None;
 
     if let Some(id) = query.draft_id {
-        if let Ok(Some(draft)) = crate::db::sent_emails::get_sent_email_by_id_and_user(&state.db, id, user.0.user_id).await {
+        if let Ok(Some(draft)) =
+            crate::db::sent_emails::get_sent_email_by_id_and_user(&state.db, id, user.0.user_id)
+                .await
+        {
             draft_id = Some(draft.id);
             to_email = draft.to_address;
             subject = draft.subject;
             selected_alias_id = Some(draft.from_alias_id);
-            
+
             // Load body from disk
             let file_path = state.storage_dir.join(draft.body_key.to_string());
             if let Ok(body) = tokio::fs::read_to_string(&file_path).await {
@@ -81,15 +80,16 @@ pub async fn compose_modal_handler(
         }
     }
 
-    ComposeModalTemplate { 
-        locale, 
+    ComposeModalTemplate {
+        locale,
         aliases,
         draft_id,
         to_email,
         subject,
         body_text,
         selected_alias_id,
-    }.into_response()
+    }
+    .into_response()
 }
 
 #[derive(Deserialize)]
@@ -148,24 +148,25 @@ pub async fn submit_email_handler(
     }
 
     // 2. Authorize alias ownership
-    let alias = match get_alias_by_id_and_user(&state.db, payload.from_alias_id, auth_user.user_id).await {
-        Ok(Some(a)) => a,
-        Ok(None) => {
-            return ToastTemplate {
-                message: locale.toast_alias_unauthorized().to_string(),
-                success: false,
+    let alias =
+        match get_alias_by_id_and_user(&state.db, payload.from_alias_id, auth_user.user_id).await {
+            Ok(Some(a)) => a,
+            Ok(None) => {
+                return ToastTemplate {
+                    message: locale.toast_alias_unauthorized().to_string(),
+                    success: false,
+                }
+                .into_response();
             }
-            .into_response();
-        }
-        Err(e) => {
-            tracing::error!("Database error fetching alias: {}", e);
-            return ToastTemplate {
-                message: "Internal server error verifying alias.".to_string(),
-                success: false,
+            Err(e) => {
+                tracing::error!("Database error fetching alias: {}", e);
+                return ToastTemplate {
+                    message: "Internal server error verifying alias.".to_string(),
+                    success: false,
+                }
+                .into_response();
             }
-            .into_response();
-        }
-    };
+        };
 
     let from_address = format!("{}@{}", alias.subdomain, alias.domain_name);
 
@@ -191,9 +192,13 @@ pub async fn submit_email_handler(
     // We do this BEFORE sending so the code isn't duplicated in the Ok/Err branches
     let body_key = Uuid::new_v4();
     let file_path = state.storage_dir.join(format!("{}.eml", body_key));
-    
+
     if let Err(e) = fs::write(&file_path, raw_mime.as_bytes()).await {
-         tracing::error!("Failed to write outbound email to disk ({}): {}", file_path.display(), e);
+        tracing::error!(
+            "Failed to write outbound email to disk ({}): {}",
+            file_path.display(),
+            e
+        );
     }
 
     // 6. Send the email via the Outbound Service
@@ -212,31 +217,39 @@ pub async fn submit_email_handler(
                 to_email,
                 &payload.subject,
                 body_key,
-            ).await {
+            )
+            .await
+            {
                 Ok(draft_id) => {
                     if let Err(err) = crate::db::sent_emails::mark_sent_email_success(
                         &state.db,
                         draft_id,
                         &message_id,
-                    ).await {
-                        tracing::error!("Database error marking sent email success for {}: {}", draft_id, err);
+                    )
+                    .await
+                    {
+                        tracing::error!(
+                            "Database error marking sent email success for {}: {}",
+                            draft_id,
+                            err
+                        );
                     }
-                },
+                }
                 Err(e) => tracing::error!("Failed to upsert draft before marking sent: {}", e),
             }
-            
+
             // Return HTMX toast with an HX-Trigger to clear the form
             let mut response = ToastTemplate {
                 message: locale.toast_email_sent_success().to_string(),
                 success: true,
             }
             .into_response();
-            
+
             response.headers_mut().insert(
                 axum::http::header::HeaderName::from_static("hx-trigger"),
                 axum::http::header::HeaderValue::from_static("emailSent"),
             );
-            
+
             response
         }
         Err(e) => {
@@ -251,16 +264,24 @@ pub async fn submit_email_handler(
                 to_email,
                 &payload.subject,
                 body_key,
-            ).await {
+            )
+            .await
+            {
                 Ok(draft_id) => {
                     if let Err(err) = crate::db::sent_emails::mark_sent_email_failed(
                         &state.db,
                         draft_id,
                         &e.to_string(),
-                    ).await {
-                        tracing::error!("Database error marking sent email failed for {}: {}", draft_id, err);
+                    )
+                    .await
+                    {
+                        tracing::error!(
+                            "Database error marking sent email failed for {}: {}",
+                            draft_id,
+                            err
+                        );
                     }
-                },
+                }
                 Err(e) => tracing::error!("Failed to upsert draft before marking failed: {}", e),
             }
 
@@ -281,20 +302,24 @@ pub async fn save_draft_handler(
     let auth_user = user.0;
 
     // We still verify they own the alias, even for a draft
-    let alias = match get_alias_by_id_and_user(&state.db, payload.from_alias_id, auth_user.user_id).await {
-        Ok(Some(a)) => a,
-        _ => {
-            return (
-                StatusCode::BAD_REQUEST,
-                "Invalid From address.",
-            ).into_response();
-        }
-    };
+    let alias =
+        match get_alias_by_id_and_user(&state.db, payload.from_alias_id, auth_user.user_id).await {
+            Ok(Some(a)) => a,
+            _ => {
+                return (StatusCode::BAD_REQUEST, "Invalid From address.").into_response();
+            }
+        };
 
     let body_key = if let Some(draft_id) = payload.draft_id {
         // If a draft already exists, fetch its existing body_key to overwrite the same file
         // preventing orphaned files from piling up on disk.
-        match crate::db::sent_emails::get_sent_email_by_id_and_user(&state.db, draft_id, auth_user.user_id).await {
+        match crate::db::sent_emails::get_sent_email_by_id_and_user(
+            &state.db,
+            draft_id,
+            auth_user.user_id,
+        )
+        .await
+        {
             Ok(Some(draft)) => draft.body_key,
             _ => Uuid::new_v4(), // Fallback if someone sends a bogus draft_id
         }
@@ -318,7 +343,9 @@ pub async fn save_draft_handler(
         &payload.to_email,
         &payload.subject,
         body_key,
-    ).await {
+    )
+    .await
+    {
         Ok(new_draft_id) => {
             // Return the hidden input field inside its container using HTMX Out-of-Band (OOB) swap.
             // This ensures subsequent auto-saves update the SAME draft row without duplicate inputs.
@@ -330,8 +357,9 @@ pub async fn save_draft_handler(
                    <span id="draft-status-text">Draft saved at {}</span>"#,
                 new_draft_id,
                 time::OffsetDateTime::now_utc().to_string()[11..16].to_string()
-            )).into_response()
-        },
+            ))
+            .into_response()
+        }
         Err(e) => {
             tracing::error!("Failed to save draft to DB: {}", e);
             (StatusCode::INTERNAL_SERVER_ERROR, "Database error").into_response()
@@ -358,7 +386,7 @@ mod tests {
         };
 
         let new_body_key = Uuid::new_v4();
-        
+
         assert!(!new_body_key.is_nil());
 
         // Scenario 2: Existing Draft
@@ -410,8 +438,10 @@ mod tests {
             selected_alias_id: None,
         };
 
-        let rendered = template.render().expect("Failed to render compose template");
-        
+        let rendered = template
+            .render()
+            .expect("Failed to render compose template");
+
         assert!(rendered.contains("Compose"));
         assert!(rendered.contains("contact@maileroo.test"));
         assert!(rendered.contains(&alias1.id.to_string()));
@@ -430,8 +460,10 @@ mod tests {
             selected_alias_id: None,
         };
 
-        let rendered = template.render().expect("Failed to render compose template");
-        
+        let rendered = template
+            .render()
+            .expect("Failed to render compose template");
+
         // Spanish translation check
         assert!(rendered.contains("Redactar"));
         assert!(rendered.contains("Para"));
@@ -440,5 +472,3 @@ mod tests {
         assert!(!rendered.contains("<option value="));
     }
 }
-
-

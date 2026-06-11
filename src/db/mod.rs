@@ -1,27 +1,29 @@
-pub mod api_keys;
-pub mod replies;
-pub mod users;
-pub mod sent_emails;
-pub mod reply_mappings;
 pub mod aliases;
+pub mod api_keys;
 pub mod domains;
 pub mod queue;
+pub mod replies;
+pub mod reply_mappings;
+pub mod sent_emails;
+pub mod users;
 
 #[cfg(test)]
 pub mod sqlite_tests;
 
+pub use aliases::*;
 pub use api_keys::{
     ApiKey, delete_api_key, get_api_keys, get_user_by_api_key_hash, insert_api_key,
 };
+pub use domains::{
+    Domain, clear_pending_dkim, delete_domain_by_id, get_dkim_key_by_domain, get_domain_by_id,
+    get_domain_count, get_domains, insert_domain, promote_pending_dkim, update_pending_dkim,
+};
+pub use queue::{QueueJob, delete_job, fetch_next_retryable_jobs, insert_job, update_job_status};
 pub use reply_mappings::{
     ReplyMappingLookup, get_or_create_reply_mapping, get_reply_mapping_by_token,
 };
-pub use users::{User, get_user_by_email, get_user_by_id, insert_user, update_last_login, seed_admin_on_startup};
-pub use aliases::*;
-pub use queue::{QueueJob, insert_job, fetch_next_retryable_jobs, update_job_status, delete_job};
-pub use domains::{
-    Domain, insert_domain, get_domains, delete_domain_by_id, get_domain_count, get_dkim_key_by_domain,
-    get_domain_by_id, update_pending_dkim, promote_pending_dkim, clear_pending_dkim,
+pub use users::{
+    User, get_user_by_email, get_user_by_id, insert_user, seed_admin_on_startup, update_last_login,
 };
 
 use crate::web::ReceivedEmail;
@@ -60,9 +62,7 @@ pub async fn run_migrations(pool: &DbPool) -> Result<(), Box<dyn std::error::Err
     match pool {
         DbPool::Postgres(pg_pool) => {
             tracing::info!("Running pending Postgres database migrations...");
-            sqlx::migrate!("./migrations/postgres")
-                .run(pg_pool)
-                .await?;
+            sqlx::migrate!("./migrations/postgres").run(pg_pool).await?;
         }
         DbPool::Sqlite(sqlite_pool) => {
             tracing::info!("Running pending SQLite database migrations...");
@@ -140,11 +140,13 @@ pub async fn get_any_email(
     pool: &DbPool,
     id: uuid::Uuid,
     user_id: uuid::Uuid,
-    ) -> Result<Option<AnyEmail>, sqlx::Error> {
+) -> Result<Option<AnyEmail>, sqlx::Error> {
     if let Some(e) = get_email_by_id(pool, id, user_id).await? {
         return Ok(Some(AnyEmail::Received(e)));
     }
-    if let Some(e) = crate::db::sent_emails::get_sent_email_by_id_and_user(pool, id, user_id).await? {
+    if let Some(e) =
+        crate::db::sent_emails::get_sent_email_by_id_and_user(pool, id, user_id).await?
+    {
         return Ok(Some(AnyEmail::Sent(e)));
     }
     Ok(None)
@@ -311,7 +313,7 @@ pub async fn get_email_by_user_id(
                  FROM received_emails e 
                  JOIN aliases a on a.id = e.alias_id
                  JOIN domains d on d.id = a.domain_id
-                 WHERE a.user_id = ? AND e.thread_id IS NULL"#
+                 WHERE a.user_id = ? AND e.thread_id IS NULL"#,
             );
 
             if alias_address.is_some() {
@@ -324,8 +326,7 @@ pub async fn get_email_by_user_id(
 
             sql.push_str(" ORDER BY e.last_activity_at DESC LIMIT ? OFFSET ?");
 
-            let mut q = sqlx::query_as::<sqlx::Sqlite, ReceivedEmail>(&sql)
-                .bind(user_id);
+            let mut q = sqlx::query_as::<sqlx::Sqlite, ReceivedEmail>(&sql).bind(user_id);
 
             if let Some(alias) = &alias_address {
                 q = q.bind(alias);
@@ -372,7 +373,7 @@ pub async fn get_email_count_by_user_id(
                 r#"SELECT COUNT(*) FROM received_emails e
                    JOIN aliases a ON a.id = e.alias_id
                    JOIN domains d on d.id = a.domain_id
-                   WHERE a.user_id = ? AND e.thread_id IS NULL"#
+                   WHERE a.user_id = ? AND e.thread_id IS NULL"#,
             );
 
             if alias_address.is_some() {
@@ -383,8 +384,7 @@ pub async fn get_email_count_by_user_id(
                 sql.push_str(" AND (e.subject LIKE ? OR e.sender_email LIKE ?)");
             }
 
-            let mut q = sqlx::query_scalar::<sqlx::Sqlite, i64>(&sql)
-                .bind(user_id);
+            let mut q = sqlx::query_scalar::<sqlx::Sqlite, i64>(&sql).bind(user_id);
 
             if let Some(alias) = &alias_address {
                 q = q.bind(alias);
@@ -514,13 +514,11 @@ pub async fn insert_email(
         DbPool::Postgres(pool) => {
             // If this is a reply (has thread_id), update the last_activity_at of the root email
             if let Some(root_id) = thread_id {
-                sqlx::query(
-                    "UPDATE received_emails SET last_activity_at = $1 WHERE id = $2",
-                )
-                .bind(received_at_val)
-                .bind(root_id)
-                .execute(pool)
-                .await?;
+                sqlx::query("UPDATE received_emails SET last_activity_at = $1 WHERE id = $2")
+                    .bind(received_at_val)
+                    .bind(root_id)
+                    .execute(pool)
+                    .await?;
             }
 
             let email = sqlx::query_as::<_, ReceivedEmail>(
@@ -718,12 +716,10 @@ pub async fn mark_email_as_forwarded(
 ) -> Result<(), sqlx::Error> {
     match pool {
         DbPool::Postgres(pool) => {
-            sqlx::query(
-                "UPDATE received_emails SET forwarded = true WHERE id = $1",
-            )
-            .bind(email_id)
-            .execute(pool)
-            .await?;
+            sqlx::query("UPDATE received_emails SET forwarded = true WHERE id = $1")
+                .bind(email_id)
+                .execute(pool)
+                .await?;
             Ok(())
         }
         DbPool::Sqlite(pool) => {
@@ -758,7 +754,7 @@ pub async fn get_all_users_with_stats(pool: &DbPool) -> Result<Vec<UserWithStats
                 LEFT JOIN received_emails re ON a.id = re.alias_id
                 GROUP BY u.id
                 ORDER BY u.created_at DESC
-                "#
+                "#,
             )
             .fetch_all(pool)
             .await?;
@@ -785,7 +781,7 @@ pub async fn get_all_users_with_stats(pool: &DbPool) -> Result<Vec<UserWithStats
                 LEFT JOIN received_emails re ON a.id = re.alias_id
                 GROUP BY u.id
                 ORDER BY u.created_at DESC
-                "#
+                "#,
             )
             .fetch_all(pool)
             .await?;
@@ -820,7 +816,7 @@ pub async fn delete_old_emails(
         }
         DbPool::Sqlite(pool) => {
             let modifier = format!("-{} days", retention_days);
-            
+
             let old_emails = sqlx::query_scalar::<sqlx::Sqlite, uuid::Uuid>(
                 r#"SELECT body_key FROM received_emails
                    WHERE received_at < datetime('now', ?)
@@ -857,17 +853,20 @@ pub async fn delete_old_emails(
 pub async fn get_alias_count(pool: &DbPool, user_id: uuid::Uuid) -> Result<i64, sqlx::Error> {
     match pool {
         DbPool::Postgres(pool) => {
-            let count = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM aliases WHERE user_id = $1")
-                .bind(user_id)
-                .fetch_one(pool)
-                .await?;
+            let count =
+                sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM aliases WHERE user_id = $1")
+                    .bind(user_id)
+                    .fetch_one(pool)
+                    .await?;
             Ok(count)
         }
         DbPool::Sqlite(pool) => {
-            let count = sqlx::query_scalar::<sqlx::Sqlite, i64>("SELECT COUNT(*) FROM aliases WHERE user_id = ?")
-                .bind(user_id)
-                .fetch_one(pool)
-                .await?;
+            let count = sqlx::query_scalar::<sqlx::Sqlite, i64>(
+                "SELECT COUNT(*) FROM aliases WHERE user_id = ?",
+            )
+            .bind(user_id)
+            .fetch_one(pool)
+            .await?;
             Ok(count)
         }
     }

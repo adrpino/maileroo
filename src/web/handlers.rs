@@ -1,12 +1,12 @@
 use crate::db::{
-    DbPool, Alias, Domain, delete_alias_by_id, get_aliases_by_user_id, get_domains, get_user_by_email,
-    insert_user, update_last_login,
+    Alias, DbPool, Domain, delete_alias_by_id, get_aliases_by_user_id, get_domains,
+    get_user_by_email, insert_user, update_last_login,
 };
 use crate::disposable_domains::is_disposable;
+use crate::web::ThreadMessage;
 use crate::web::auth::{hash_password, verify_password};
 use crate::web::i18n::{Locale, Messages};
 use crate::web::{AdminUser, AppState, AuthenticatedUser, extract_domain};
-use crate::web::ThreadMessage;
 use axum::body::Body;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
@@ -486,19 +486,20 @@ pub async fn generate_corporate_suggestions(pool: &DbPool, domain_id: Uuid) -> V
 
     // Filter against DB
     let taken_subdomains: Vec<String> = match pool {
-        DbPool::Postgres(pool) => {
-            sqlx::query_scalar::<_, String>(
-                "SELECT subdomain FROM aliases WHERE domain_id = $1 AND subdomain = ANY($2)",
-            )
-            .bind(domain_id)
-            .bind(&pool_candidates)
-            .fetch_all(pool)
-            .await
-            .unwrap_or_default()
-        }
+        DbPool::Postgres(pool) => sqlx::query_scalar::<_, String>(
+            "SELECT subdomain FROM aliases WHERE domain_id = $1 AND subdomain = ANY($2)",
+        )
+        .bind(domain_id)
+        .bind(&pool_candidates)
+        .fetch_all(pool)
+        .await
+        .unwrap_or_default(),
         DbPool::Sqlite(pool) => {
             let placeholders = vec!["?"; pool_candidates.len()].join(", ");
-            let sql = format!("SELECT subdomain FROM aliases WHERE domain_id = ? AND subdomain IN ({})", placeholders);
+            let sql = format!(
+                "SELECT subdomain FROM aliases WHERE domain_id = ? AND subdomain IN ({})",
+                placeholders
+            );
             let mut q = sqlx::query_scalar::<sqlx::Sqlite, String>(&sql).bind(domain_id);
             for cand in &pool_candidates {
                 q = q.bind(cand);
@@ -848,8 +849,6 @@ pub async fn alias_suggestions_handler(
     }
 }
 
-
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -858,7 +857,7 @@ mod tests {
     #[test]
     fn test_aliases_template_limit_enforcement() {
         let max_aliases = 5;
-        
+
         let dummy_alias = crate::db::Alias {
             id: uuid::Uuid::new_v4(),
             user_id: uuid::Uuid::new_v4(),
@@ -873,7 +872,7 @@ mod tests {
 
         // Create 5 aliases (limit reached)
         let aliases = vec![dummy_alias; 5];
-        
+
         // 1. User CANNOT bypass limit
         let t_normal = AliasesTemplate {
             aliases: aliases.clone(),
@@ -884,12 +883,14 @@ mod tests {
             locale: Locale::En,
             can_bypass_limit: false,
         };
-        
+
         let html_normal = t_normal.render().unwrap();
         // Since limits are reached and no bypass, button should be disabled
-        assert!(html_normal.contains("disabled style=\"background: #cbd5e0; cursor: not-allowed;\""));
+        assert!(
+            html_normal.contains("disabled style=\"background: #cbd5e0; cursor: not-allowed;\"")
+        );
         assert!(html_normal.contains("Limit of 5 aliases reached")); // Ensure the limit text exists
-        
+
         // 2. User CAN bypass limit
         let t_bypass = AliasesTemplate {
             aliases,
@@ -900,10 +901,12 @@ mod tests {
             locale: Locale::En,
             can_bypass_limit: true,
         };
-        
+
         let html_bypass = t_bypass.render().unwrap();
         // Button should NOT be disabled!
-        assert!(!html_bypass.contains("disabled style=\"background: #cbd5e0; cursor: not-allowed;\""));
+        assert!(
+            !html_bypass.contains("disabled style=\"background: #cbd5e0; cursor: not-allowed;\"")
+        );
         assert!(!html_bypass.contains("Limit of 5 aliases reached"));
     }
 }

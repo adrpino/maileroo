@@ -238,7 +238,7 @@ pub async fn get_sent_emails_by_user_id(
                  FROM sent_emails s
                  JOIN aliases a ON s.from_alias_id = a.id
                  JOIN domains d ON a.domain_id = d.id
-                 WHERE s.user_id = $1 AND s.status = $2::email_status"
+                 WHERE s.user_id = $1 AND s.status = $2::email_status",
             );
 
             if alias_filter.is_some() {
@@ -253,18 +253,35 @@ pub async fn get_sent_emails_by_user_id(
                 }
             }
 
-            let bind_idx_limit = if alias_filter.is_some() && query_filter.is_some() { "5" } else if alias_filter.is_some() || query_filter.is_some() { "4" } else { "3" };
-            query.push_str(&format!(" ORDER BY s.created_at DESC LIMIT ${}", bind_idx_limit));
-            
-            let bind_idx_offset = if alias_filter.is_some() && query_filter.is_some() { "6" } else if alias_filter.is_some() || query_filter.is_some() { "5" } else { "4" };
+            let bind_idx_limit = if alias_filter.is_some() && query_filter.is_some() {
+                "5"
+            } else if alias_filter.is_some() || query_filter.is_some() {
+                "4"
+            } else {
+                "3"
+            };
+            query.push_str(&format!(
+                " ORDER BY s.created_at DESC LIMIT ${}",
+                bind_idx_limit
+            ));
+
+            let bind_idx_offset = if alias_filter.is_some() && query_filter.is_some() {
+                "6"
+            } else if alias_filter.is_some() || query_filter.is_some() {
+                "5"
+            } else {
+                "4"
+            };
             query.push_str(&format!(" OFFSET ${}", bind_idx_offset));
 
-            let mut q = sqlx::query_as::<_, SentEmailRow>(&query).bind(user_id).bind(status);
+            let mut q = sqlx::query_as::<_, SentEmailRow>(&query)
+                .bind(user_id)
+                .bind(status);
 
             if let Some(alias) = &alias_filter {
                 q = q.bind(alias);
             }
-            
+
             if let Some(search) = &query_filter {
                 let pattern = format!("%{}%", search);
                 q = q.bind(pattern);
@@ -280,7 +297,7 @@ pub async fn get_sent_emails_by_user_id(
                  FROM sent_emails s
                  JOIN aliases a ON s.from_alias_id = a.id
                  JOIN domains d ON a.domain_id = d.id
-                 WHERE s.user_id = ? AND s.status = ?"
+                 WHERE s.user_id = ? AND s.status = ?",
             );
 
             if alias_filter.is_some() {
@@ -293,12 +310,14 @@ pub async fn get_sent_emails_by_user_id(
 
             query.push_str(" ORDER BY s.created_at DESC LIMIT ? OFFSET ?");
 
-            let mut q = sqlx::query_as::<sqlx::Sqlite, SentEmailRow>(&query).bind(user_id).bind(status);
+            let mut q = sqlx::query_as::<sqlx::Sqlite, SentEmailRow>(&query)
+                .bind(user_id)
+                .bind(status);
 
             if let Some(alias) = &alias_filter {
                 q = q.bind(alias);
             }
-            
+
             if let Some(search) = &query_filter {
                 let pattern = format!("%{}%", search);
                 q = q.bind(pattern.clone()).bind(pattern);
@@ -324,7 +343,7 @@ pub async fn get_sent_email_count_by_user_id(
                 "SELECT COUNT(*) FROM sent_emails s
                  JOIN aliases a ON s.from_alias_id = a.id
                  JOIN domains d ON a.domain_id = d.id
-                 WHERE s.user_id = $1 AND s.status = $2::email_status"
+                 WHERE s.user_id = $1 AND s.status = $2::email_status",
             );
 
             if alias_filter.is_some() {
@@ -339,12 +358,14 @@ pub async fn get_sent_email_count_by_user_id(
                 }
             }
 
-            let mut q = sqlx::query_scalar::<_, Option<i64>>(&query).bind(user_id).bind(status);
+            let mut q = sqlx::query_scalar::<_, Option<i64>>(&query)
+                .bind(user_id)
+                .bind(status);
 
             if let Some(alias) = &alias_filter {
                 q = q.bind(alias);
             }
-            
+
             if let Some(search) = &query_filter {
                 let pattern = format!("%{}%", search);
                 q = q.bind(pattern);
@@ -357,7 +378,7 @@ pub async fn get_sent_email_count_by_user_id(
                 "SELECT COUNT(*) FROM sent_emails s
                  JOIN aliases a ON s.from_alias_id = a.id
                  JOIN domains d ON a.domain_id = d.id
-                 WHERE s.user_id = ? AND s.status = ?"
+                 WHERE s.user_id = ? AND s.status = ?",
             );
 
             if alias_filter.is_some() {
@@ -368,12 +389,14 @@ pub async fn get_sent_email_count_by_user_id(
                 query.push_str(" AND (s.to_address LIKE ? OR s.subject LIKE ?)");
             }
 
-            let mut q = sqlx::query_scalar::<sqlx::Sqlite, Option<i64>>(&query).bind(user_id).bind(status);
+            let mut q = sqlx::query_scalar::<sqlx::Sqlite, Option<i64>>(&query)
+                .bind(user_id)
+                .bind(status);
 
             if let Some(alias) = &alias_filter {
                 q = q.bind(alias);
             }
-            
+
             if let Some(search) = &query_filter {
                 let pattern = format!("%{}%", search);
                 q = q.bind(pattern.clone()).bind(pattern);
@@ -545,13 +568,12 @@ pub async fn delete_sent_email_by_id(
             Ok(result.rows_affected() > 0)
         }
         DbPool::Sqlite(pool) => {
-            let result = sqlx::query::<sqlx::Sqlite>(
-                "DELETE FROM sent_emails WHERE id = ? AND user_id = ?",
-            )
-            .bind(id)
-            .bind(user_id)
-            .execute(pool)
-            .await?;
+            let result =
+                sqlx::query::<sqlx::Sqlite>("DELETE FROM sent_emails WHERE id = ? AND user_id = ?")
+                    .bind(id)
+                    .bind(user_id)
+                    .execute(pool)
+                    .await?;
             Ok(result.rows_affected() > 0)
         }
     }

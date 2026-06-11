@@ -1,13 +1,13 @@
 mod common;
 
-use maileroo::web::{AppState, DashboardEvent, create_app};
+use axum::body::Body;
+use axum::http::{Request, StatusCode};
 use maileroo::config::AppConfig;
+use maileroo::db::sent_emails::EmailStatus;
 use maileroo::dns::DnsScanner;
 use maileroo::outbound::OutboundService;
-use maileroo::db::sent_emails::EmailStatus;
+use maileroo::web::{AppState, DashboardEvent, create_app};
 use std::sync::Arc;
-use axum::http::{Request, StatusCode};
-use axum::body::Body;
 use tower::ServiceExt;
 use uuid::Uuid;
 
@@ -18,12 +18,25 @@ async fn test_draft_delete_confirmation_page_ok() {
         let temp_storage_dir = tempfile::tempdir().unwrap();
 
         // 2. Setup mock test user, alias and a draft email
-        let user = common::create_test_user(&db, "test_admin@example.com", "my_secure_password123").await;
-        let alias = common::create_test_alias(&db, user.id, "example.com", "hello", "dest@gmail.com").await;
-        let draft = common::create_test_draft(&db, user.id, alias.id, "someone@external.com", "Urgent-Subject-Line", EmailStatus::Draft).await;
+        let user =
+            common::create_test_user(&db, "test_admin@example.com", "my_secure_password123").await;
+        let alias =
+            common::create_test_alias(&db, user.id, "example.com", "hello", "dest@gmail.com").await;
+        let draft = common::create_test_draft(
+            &db,
+            user.id,
+            alias.id,
+            "someone@external.com",
+            "Urgent-Subject-Line",
+            EmailStatus::Draft,
+        )
+        .await;
 
         // 3. Create App State
-        let resolver = hickory_resolver::TokioResolver::builder_tokio().unwrap().build().unwrap();
+        let resolver = hickory_resolver::TokioResolver::builder_tokio()
+            .unwrap()
+            .build()
+            .unwrap();
         let dns_scanner = DnsScanner::new(resolver.clone());
         let outbound = Arc::new(OutboundService::new(
             "srs_secret_key_123".to_string(),
@@ -45,7 +58,12 @@ async fn test_draft_delete_confirmation_page_ok() {
         let app_router = create_app(state).await;
 
         // 4. Authenticate via login
-        let auth_cookie = common::get_auth_cookie(app_router.clone(), "test_admin@example.com", "my_secure_password123").await;
+        let auth_cookie = common::get_auth_cookie(
+            app_router.clone(),
+            "test_admin@example.com",
+            "my_secure_password123",
+        )
+        .await;
 
         // Extract CSRF token value
         let csrf_token = common::extract_csrf_token(&auth_cookie);
@@ -63,12 +81,15 @@ async fn test_draft_delete_confirmation_page_ok() {
         // 6. Assert success and verify correct template rendering
         assert_eq!(response.status(), StatusCode::OK);
 
-        let body_bytes = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let body_bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let body_string = String::from_utf8_lossy(&body_bytes);
-        
+
         assert!(body_string.contains("Urgent-Subject-Line"));
         assert!(body_string.contains("delete"));
-    }).await;
+    })
+    .await;
 }
 
 #[tokio::test]
@@ -78,17 +99,32 @@ async fn test_email_deletion_and_disk_cleanup_flow() {
         let temp_storage_dir = tempfile::tempdir().unwrap();
 
         // 2. Setup mock test user, alias and a draft email
-        let user = common::create_test_user(&db, "test_admin@example.com", "my_secure_password123").await;
-        let alias = common::create_test_alias(&db, user.id, "example.com", "hello", "dest@gmail.com").await;
-        let draft = common::create_test_draft(&db, user.id, alias.id, "someone@external.com", "Draft-Subject", EmailStatus::Draft).await;
+        let user =
+            common::create_test_user(&db, "test_admin@example.com", "my_secure_password123").await;
+        let alias =
+            common::create_test_alias(&db, user.id, "example.com", "hello", "dest@gmail.com").await;
+        let draft = common::create_test_draft(
+            &db,
+            user.id,
+            alias.id,
+            "someone@external.com",
+            "Draft-Subject",
+            EmailStatus::Draft,
+        )
+        .await;
 
         // 3. Write a mock raw email body file to the storage directory matching the draft's body_key!
         let draft_file_path = temp_storage_dir.path().join(draft.body_key.to_string());
-        tokio::fs::write(&draft_file_path, b"Mock raw draft email payload").await.unwrap();
+        tokio::fs::write(&draft_file_path, b"Mock raw draft email payload")
+            .await
+            .unwrap();
         assert!(draft_file_path.exists());
 
         // 4. Create App State
-        let resolver = hickory_resolver::TokioResolver::builder_tokio().unwrap().build().unwrap();
+        let resolver = hickory_resolver::TokioResolver::builder_tokio()
+            .unwrap()
+            .build()
+            .unwrap();
         let dns_scanner = DnsScanner::new(resolver.clone());
         let outbound = Arc::new(OutboundService::new(
             "srs_secret_key_123".to_string(),
@@ -110,7 +146,12 @@ async fn test_email_deletion_and_disk_cleanup_flow() {
         let app_router = create_app(state).await;
 
         // 5. Authenticate via login
-        let auth_cookie = common::get_auth_cookie(app_router.clone(), "test_admin@example.com", "my_secure_password123").await;
+        let auth_cookie = common::get_auth_cookie(
+            app_router.clone(),
+            "test_admin@example.com",
+            "my_secure_password123",
+        )
+        .await;
 
         // Extract CSRF token value
         let csrf_token = common::extract_csrf_token(&auth_cookie);
@@ -142,8 +183,12 @@ async fn test_email_deletion_and_disk_cleanup_flow() {
             }
             tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         }
-        assert!(file_deleted, "Storage file was not physically deleted from disk!");
-    }).await;
+        assert!(
+            file_deleted,
+            "Storage file was not physically deleted from disk!"
+        );
+    })
+    .await;
 }
 
 #[tokio::test]
@@ -318,7 +363,7 @@ async fn test_save_draft_lifecycle_flow() {
         // Extract the generated draft ID from the returned HTML response
         let body_bytes1 = axum::body::to_bytes(response1.into_body(), usize::MAX).await.unwrap();
         let body_str1 = String::from_utf8(body_bytes1.to_vec()).unwrap();
-        
+
         let marker = r#"value=""#;
         let start_idx = body_str1.find(marker).expect("draft_id value not found in HTML response!") + marker.len();
         let end_idx = body_str1[start_idx..].find('"').unwrap() + start_idx;
@@ -346,7 +391,7 @@ async fn test_save_draft_lifecycle_flow() {
         // Extract and verify that the draft ID remains identical (no new row was created)
         let body_bytes2 = axum::body::to_bytes(response2.into_body(), usize::MAX).await.unwrap();
         let body_str2 = String::from_utf8(body_bytes2.to_vec()).unwrap();
-        
+
         let start_idx2 = body_str2.find(marker).expect("draft_id value not found in HTML response!") + marker.len();
         let end_idx2 = body_str2[start_idx2..].find('"').unwrap() + start_idx2;
         let draft_uuid_str2 = &body_str2[start_idx2..end_idx2];

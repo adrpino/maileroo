@@ -93,7 +93,7 @@ pub async fn get_domains(pool: &DbPool) -> Result<Vec<Domain>, sqlx::Error> {
                 pending_dkim_private_key, pending_dkim_public_key, pending_dkim_selector,
                 created_at
                 from domains
-                "#
+                "#,
             )
             .fetch_all(pool)
             .await?;
@@ -122,22 +122,18 @@ pub async fn get_dkim_key_by_domain(
     domain_name: &str,
 ) -> Result<Option<(Option<String>, String)>, sqlx::Error> {
     let dkim_opt = match pool {
-        DbPool::Postgres(p) => {
-            sqlx::query_as::<_, (Option<String>, String)>(
-                "SELECT dkim_private_key, dkim_selector FROM domains WHERE name = $1 AND active = true"
-            )
-            .bind(domain_name)
-            .fetch_optional(p)
-            .await?
-        }
-        DbPool::Sqlite(p) => {
-            sqlx::query_as::<sqlx::Sqlite, (Option<String>, String)>(
-                "SELECT dkim_private_key, dkim_selector FROM domains WHERE name = ? AND active = true"
-            )
-            .bind(domain_name)
-            .fetch_optional(p)
-            .await?
-        }
+        DbPool::Postgres(p) => sqlx::query_as::<_, (Option<String>, String)>(
+            "SELECT dkim_private_key, dkim_selector FROM domains WHERE name = $1 AND active = true",
+        )
+        .bind(domain_name)
+        .fetch_optional(p)
+        .await?,
+        DbPool::Sqlite(p) => sqlx::query_as::<sqlx::Sqlite, (Option<String>, String)>(
+            "SELECT dkim_private_key, dkim_selector FROM domains WHERE name = ? AND active = true",
+        )
+        .bind(domain_name)
+        .fetch_optional(p)
+        .await?,
     };
 
     if let Some((encrypted_key, selector)) = dkim_opt {
@@ -145,8 +141,15 @@ pub async fn get_dkim_key_by_domain(
             match crate::crypto::decrypt(&key) {
                 Ok(plain) => Some(plain),
                 Err(e) => {
-                    tracing::error!("Failed to decrypt DKIM private key for domain {}: {}", domain_name, e);
-                    return Err(sqlx::Error::Protocol(format!("Failed to decrypt DKIM key: {}", e)));
+                    tracing::error!(
+                        "Failed to decrypt DKIM private key for domain {}: {}",
+                        domain_name,
+                        e
+                    );
+                    return Err(sqlx::Error::Protocol(format!(
+                        "Failed to decrypt DKIM key: {}",
+                        e
+                    )));
                 }
             }
         } else {
@@ -194,7 +197,10 @@ pub async fn delete_domain_by_id(pool: &DbPool, domain_id: uuid::Uuid) -> Result
     }
 }
 
-pub async fn get_domain_by_id(pool: &DbPool, id: uuid::Uuid) -> Result<Option<Domain>, sqlx::Error> {
+pub async fn get_domain_by_id(
+    pool: &DbPool,
+    id: uuid::Uuid,
+) -> Result<Option<Domain>, sqlx::Error> {
     match pool {
         DbPool::Postgres(p) => {
             let domain = sqlx::query_as::<_, Domain>(
@@ -241,7 +247,7 @@ pub async fn update_pending_dkim(
                     pending_dkim_public_key = $2,
                     pending_dkim_selector = $3
                 WHERE id = $4
-                "#
+                "#,
             )
             .bind(private_key)
             .bind(public_key)
@@ -259,7 +265,7 @@ pub async fn update_pending_dkim(
                     pending_dkim_public_key = ?,
                     pending_dkim_selector = ?
                 WHERE id = ?
-                "#
+                "#,
             )
             .bind(private_key)
             .bind(public_key)
@@ -285,7 +291,7 @@ pub async fn promote_pending_dkim(pool: &DbPool, id: uuid::Uuid) -> Result<(), s
                     pending_dkim_public_key = NULL,
                     pending_dkim_selector = NULL
                 WHERE id = $1
-                "#
+                "#,
             )
             .bind(id)
             .execute(p)
@@ -303,7 +309,7 @@ pub async fn promote_pending_dkim(pool: &DbPool, id: uuid::Uuid) -> Result<(), s
                     pending_dkim_public_key = NULL,
                     pending_dkim_selector = NULL
                 WHERE id = ?
-                "#
+                "#,
             )
             .bind(id)
             .execute(p)
@@ -323,7 +329,7 @@ pub async fn clear_pending_dkim(pool: &DbPool, id: uuid::Uuid) -> Result<(), sql
                     pending_dkim_public_key = NULL,
                     pending_dkim_selector = NULL
                 WHERE id = $1
-                "#
+                "#,
             )
             .bind(id)
             .execute(p)
@@ -338,7 +344,7 @@ pub async fn clear_pending_dkim(pool: &DbPool, id: uuid::Uuid) -> Result<(), sql
                     pending_dkim_public_key = NULL,
                     pending_dkim_selector = NULL
                 WHERE id = ?
-                "#
+                "#,
             )
             .bind(id)
             .execute(p)

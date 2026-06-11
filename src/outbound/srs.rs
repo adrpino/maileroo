@@ -70,8 +70,7 @@ pub fn decode_srs(srs_address: &str, secret: &str) -> Option<String> {
         return None;
     }
 
-    let mut mac =
-        HmacSha256::new_from_slice(secret.as_bytes()).ok()?;
+    let mut mac = HmacSha256::new_from_slice(secret.as_bytes()).ok()?;
     mac.update(format!("{}{}{}", timestamp, sender_domain, sender_local).as_bytes());
     let result = mac.finalize().into_bytes();
     let expected_hash = &base32::encode(Alphabet::Crockford, &result)[..4];
@@ -179,13 +178,15 @@ mod tests {
             % 1024;
         let expired_timestamp = (current_timestamp + 1024 - 30) % 1024;
 
-        let mut mac =
-            HmacSha256::new_from_slice(secret.as_bytes()).unwrap();
+        let mut mac = HmacSha256::new_from_slice(secret.as_bytes()).unwrap();
         mac.update(format!("{}gmail.comalice", expired_timestamp).as_bytes());
         let result = mac.finalize().into_bytes();
         let hash = &base32::encode(Alphabet::Crockford, &result)[..4];
 
-        let expired_srs = format!("SRS0+{}={}={}={}@example.com", hash, expired_timestamp, "gmail.com", "alice");
+        let expired_srs = format!(
+            "SRS0+{}={}={}={}@example.com",
+            hash, expired_timestamp, "gmail.com", "alice"
+        );
         let decoded = decode_srs(&expired_srs, secret);
 
         assert_eq!(decoded, None);
@@ -194,6 +195,9 @@ mod tests {
     #[test]
     fn test_decode_non_srs() {
         assert_eq!(decode_srs("alice@gmail.com", "secret"), None);
-        assert_eq!(decode_srs("SRS1+hash=timestamp=domain=local@domain.com", "secret"), None);
+        assert_eq!(
+            decode_srs("SRS1+hash=timestamp=domain=local@domain.com", "secret"),
+            None
+        );
     }
 }

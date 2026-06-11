@@ -1,21 +1,21 @@
-use mail_auth::common::crypto::Ed25519Key;
 use base64::Engine;
+use mail_auth::common::crypto::Ed25519Key;
 
 /// Generates a secure Ed25519 key pair for DKIM.
 /// Returns a tuple of `(private_key_b64, public_key_dns)`.
 pub fn generate_dkim_key_pair() -> Result<(String, String), anyhow::Error> {
     let pkcs8_bytes = Ed25519Key::generate_pkcs8()
         .map_err(|e| anyhow::anyhow!("Failed to generate Ed25519 key: {}", e))?;
-    
+
     // Parse the generated PKCS#8 key to get the public key
     let key_pair = Ed25519Key::from_pkcs8_der(&pkcs8_bytes)
         .map_err(|e| anyhow::anyhow!("Failed to parse generated Ed25519 key: {}", e))?;
-    
+
     let public_der = key_pair.public_key();
-    
+
     let private_b64 = base64::prelude::BASE64_STANDARD.encode(&pkcs8_bytes);
     let public_dns = base64::prelude::BASE64_STANDARD.encode(public_der);
-    
+
     Ok((private_b64, public_dns))
 }
 
@@ -33,7 +33,7 @@ pub fn sign_message_with_dkim(
                 .domain(sender_domain)
                 .selector(selector)
                 .headers(["From", "To", "Subject", "Date", "Message-ID"]);
-            
+
             if let Ok(signature) = signer.sign(body) {
                 let sig_header = signature.to_string();
                 let mut signed_body = Vec::with_capacity(sig_header.len() + 2 + body.len());
