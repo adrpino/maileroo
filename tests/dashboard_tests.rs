@@ -210,6 +210,15 @@ async fn test_send_saved_draft_flow_success() {
         let draft1 = common::create_test_draft(&db, user.id, alias.id, "someone1@external.com", "Draft-Subject-1", EmailStatus::Draft).await;
         let draft2 = common::create_test_draft(&db, user.id, alias.id, "someone2@external.com", "Draft-Subject-2", EmailStatus::Draft).await;
 
+        // Write the physical files representing draft bodies on disk matching draft.body_key
+        let draft1_file_path = temp_storage_dir.path().join(draft1.body_key.to_string());
+        tokio::fs::write(&draft1_file_path, b"Mock raw draft body payload 1").await.unwrap();
+        assert!(draft1_file_path.exists());
+
+        let draft2_file_path = temp_storage_dir.path().join(draft2.body_key.to_string());
+        tokio::fs::write(&draft2_file_path, b"Mock raw draft body payload 2").await.unwrap();
+        assert!(draft2_file_path.exists());
+
         // 3. Create App State
         let resolver = hickory_resolver::TokioResolver::builder_tokio().unwrap().build().unwrap();
         let dns_scanner = DnsScanner::new(resolver.clone());
@@ -293,6 +302,19 @@ async fn test_send_saved_draft_flow_success() {
                 }
             };
             assert_ne!(status_str, "draft", "Draft {} status remained 'draft' after sending!", draft.id);
+        }
+
+        // 8. Verify both raw draft files were successfully cleaned up and deleted from disk!
+        for draft_file_path in &[draft1_file_path, draft2_file_path] {
+            let mut file_deleted = false;
+            for _ in 0..100 {
+                if !draft_file_path.exists() {
+                    file_deleted = true;
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            }
+            assert!(file_deleted, "Storage draft file {:?} was not physically deleted from disk after sending!", draft_file_path);
         }
     }).await;
 }
@@ -417,5 +439,83 @@ async fn test_save_draft_lifecycle_flow() {
             }
         };
         assert_eq!(draft_count, 1, "Expected exactly 1 draft in the database, found {}", draft_count);
+    }).await;
+}
+
+#[tokio::test]
+async fn test_send_already_sent_email_fails_and_prevents_file_deletion() {
+    common::run_on_all_dbs(|db| async move {
+        // 1. Setup temporary storage directory
+        let temp_storage_dir = tempfile::tempdir().unwrap();
+
+        // 2. Setup mock test user, alias and an already SENT email (not draft)
+        let user = common::create_test_user(&db, "test_admin@example.com", "my_secure_password123").await;
+        common::grant_user_sender_permissions(&db, user.id).await;
+
+        let alias = common::create_test_alias(&db, user.id, "example.com", "hello", "dest@gmail.com").await;
+        let sent_email = common::create_test_draft(
+            &db,
+            user.id,
+            alias.id,
+            "someone@external.com",
+            "Already-Sent-Subject",
+            EmailStatus::Sent,
+        )
+        .await;
+
+        // Write the physical file representing the sent email's body on disk matching sent_email.body_key
+        let sent_email_file_path = temp_storage_dir.path().join(sent_email.body_key.to_string());
+        tokio::fs::write(&sent_email_file_path, b"My precious sent email payload").await.unwrap();
+        assert!(sent_email_file_path.exists());
+
+        // 3. Create App State
+        let resolver = hickory_resolver::TokioResolver::builder_tokio().unwrap().build().unwrap();
+        let dns_scanner = DnsScanner::new(resolver.clone());
+        let outbound = Arc::new(OutboundService::new(
+            "srs_secret_key_123".to_string(),
+            resolver,
+            "example.com".to_string(),
+            db.clone(),
+            temp_storage_dir.path().to_path_buf(),
+        ));
+
+        let state = AppState {
+            db: db.clone(),
+            storage_dir: temp_storage_dir.path().to_path_buf(),
+            dns_scanner,
+            tx: tokio::sync::broadcast::channel::<DashboardEvent>(100).0,
+            outbound,
+            config: AppConfig { auto_tls: None },
+        };
+
+        let app_router = create_app(state).await;
+
+        // 4. Authenticate via login
+        let auth_cookie = common::get_auth_cookie(app_router.clone(), "test_admin@example.com", "my_secure_password123").await;
+        let csrf_token = common::extract_csrf_token(&auth_cookie);
+
+        // 5. Try to POST a request to send this email using the sent_email's ID as the draft_id
+        let payload = format!(
+            "draft_id={}&from_alias_id={}&to_email=recipient@external.com&subject=Test-Subject&body_text=Stale-Body",
+            sent_email.id, alias.id
+        );
+
+        let request = Request::builder()
+            .method("POST")
+            .uri("/api/v1/emails/send")
+            .header(axum::http::header::COOKIE, auth_cookie)
+            .header("X-CSRF-Token", csrf_token)
+            .header(axum::http::header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+            .body(Body::from(payload))
+            .unwrap();
+
+        let response = app_router.oneshot(request).await.unwrap();
+
+        // 6. Assert that the request failed (the handler now correctly propagates database failure as a 500 Internal Server Error)
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+
+        // 7. Wait a moment and verify that the sent email's body file was NOT deleted!
+        tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+        assert!(sent_email_file_path.exists(), "The sent email's body file was wrongly deleted from disk!");
     }).await;
 }

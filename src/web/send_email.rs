@@ -170,6 +170,22 @@ pub async fn submit_email_handler(
 
     let from_address = format!("{}@{}", alias.subdomain, alias.domain_name);
 
+    // Pre-fetch the old draft's body key if this is an active draft.
+    // This allows us to cleanly delete the old raw draft file from disk once sent,
+    // preventing orphaned plain-text draft files from leaking on the host filesystem.
+    let mut old_draft_body_key = None;
+    if let Some(draft_id) = payload.draft_id {
+        if let Ok(Some(draft)) = crate::db::sent_emails::get_sent_email_by_id_and_user(
+            &state.db,
+            draft_id,
+            auth_user.user_id,
+        )
+        .await
+        {
+            old_draft_body_key = Some(draft.body_key);
+        }
+    }
+
     // 3. Generate a globally unique Message-ID up-front
     let domain = from_address.split('@').nth(1).unwrap_or("localhost");
     let message_id = crate::outbound::mime::generate_message_id(domain);
@@ -201,6 +217,19 @@ pub async fn submit_email_handler(
         );
     }
 
+    // Helper closure to trigger safe, asynchronous deletion of the old draft file.
+    // We execute this on a spawned task to avoid adding latency to the Axum HTTP response.
+    let old_draft_cleanup = |storage_dir: std::path::PathBuf, old_key: Option<Uuid>| {
+        if let Some(key) = old_key {
+            let file_path = storage_dir.join(key.to_string());
+            tokio::spawn(async move {
+                if file_path.exists() {
+                    let _ = tokio::fs::remove_file(&file_path).await;
+                }
+            });
+        }
+    };
+
     // 6. Send the email via the Outbound Service
     match state
         .outbound
@@ -221,6 +250,9 @@ pub async fn submit_email_handler(
             .await
             {
                 Ok(draft_id) => {
+                    // Clean up the old raw draft file from disk to prevent leakage
+                    old_draft_cleanup(state.storage_dir.clone(), old_draft_body_key);
+
                     if let Err(err) = crate::db::sent_emails::mark_sent_email_success(
                         &state.db,
                         draft_id,
@@ -233,9 +265,29 @@ pub async fn submit_email_handler(
                             draft_id,
                             err
                         );
+                        return (
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            ToastTemplate {
+                                message: "Email sent, but failed to update status in the database."
+                                    .to_string(),
+                                success: false,
+                            },
+                        )
+                            .into_response();
                     }
                 }
-                Err(e) => tracing::error!("Failed to upsert draft before marking sent: {}", e),
+                Err(e) => {
+                    tracing::error!("Failed to upsert draft before marking sent: {}", e);
+                    return (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        ToastTemplate {
+                            message: "Email sent, but failed to update status in the database."
+                                .to_string(),
+                            success: false,
+                        },
+                    )
+                        .into_response();
+                }
             }
 
             // Return HTMX toast with an HX-Trigger to clear the form
@@ -268,6 +320,9 @@ pub async fn submit_email_handler(
             .await
             {
                 Ok(draft_id) => {
+                    // Clean up the old raw draft file from disk to prevent leakage
+                    old_draft_cleanup(state.storage_dir.clone(), old_draft_body_key);
+
                     if let Err(err) = crate::db::sent_emails::mark_sent_email_failed(
                         &state.db,
                         draft_id,
