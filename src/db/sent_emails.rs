@@ -422,7 +422,7 @@ pub async fn upsert_draft(
         DbPool::Postgres(pool) => {
             if let Some(id) = draft_id {
                 // Update existing draft
-                sqlx::query(
+                let res = sqlx::query(
                     r#"
                     UPDATE sent_emails 
                     SET from_alias_id = $1, to_address = $2, subject = $3, body_key = $4, updated_at = $5
@@ -438,6 +438,9 @@ pub async fn upsert_draft(
                 .bind(user_id)
                 .execute(pool)
                 .await?;
+                if res.rows_affected() == 0 {
+                    return Err(sqlx::Error::RowNotFound);
+                }
                 Ok(id)
             } else {
                 // Insert new draft
@@ -466,7 +469,7 @@ pub async fn upsert_draft(
         DbPool::Sqlite(pool) => {
             if let Some(id) = draft_id {
                 // Update existing draft
-                sqlx::query(
+                let res = sqlx::query(
                     r#"
                     UPDATE sent_emails 
                     SET from_alias_id = ?, to_address = ?, subject = ?, body_key = ?, updated_at = ?
@@ -482,6 +485,9 @@ pub async fn upsert_draft(
                 .bind(user_id)
                 .execute(pool)
                 .await?;
+                if res.rows_affected() == 0 {
+                    return Err(sqlx::Error::RowNotFound);
+                }
                 Ok(id)
             } else {
                 // Insert new draft
