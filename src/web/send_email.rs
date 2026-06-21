@@ -1,4 +1,5 @@
 use crate::db::get_alias_by_id_and_user;
+use crate::fs::write_file_async_with_permissions;
 use crate::outbound::mime::{MimeEmail, build_mime};
 use crate::web::i18n::{Locale, Messages};
 use crate::web::{AppState, FirsthandSenderUser};
@@ -10,7 +11,6 @@ use axum::{
 };
 use serde::Deserialize;
 use std::sync::Arc;
-use tokio::fs;
 use uuid::Uuid;
 
 #[derive(Template)]
@@ -193,7 +193,7 @@ pub async fn submit_email_handler(
     let body_key = Uuid::new_v4();
     let file_path = state.storage_dir.join(format!("{}.eml", body_key));
 
-    if let Err(e) = fs::write(&file_path, raw_mime.as_bytes()).await {
+    if let Err(e) = write_file_async_with_permissions(&file_path, raw_mime.as_bytes()).await {
         tracing::error!(
             "Failed to write outbound email to disk ({}): {}",
             file_path.display(),
@@ -330,7 +330,9 @@ pub async fn save_draft_handler(
 
     // Save or overwrite the body text to storage
     let file_path = state.storage_dir.join(body_key.to_string());
-    if let Err(e) = fs::write(&file_path, payload.body_text.as_bytes()).await {
+    if let Err(e) =
+        write_file_async_with_permissions(&file_path, payload.body_text.as_bytes()).await
+    {
         tracing::error!("Failed to write draft body to storage: {}", e);
         return (StatusCode::INTERNAL_SERVER_ERROR, "Storage error").into_response();
     }

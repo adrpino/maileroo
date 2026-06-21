@@ -4,6 +4,7 @@ use argon2::{
 };
 use dotenvy::dotenv;
 use maileroo::db::{DbPool, init_pool, run_migrations};
+use maileroo::fs::{create_dir_all_async_with_permissions, write_file_async_with_permissions};
 use std::env;
 use uuid::Uuid;
 
@@ -28,7 +29,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 async fn seed_data(pool: &DbPool) -> Result<(), Box<dyn std::error::Error>> {
     let storage_dir = env::var("STORAGE_DIR").unwrap_or_else(|_| "storage/emails".to_string());
     let storage_path = std::path::Path::new(&storage_dir);
-    tokio::fs::create_dir_all(storage_path).await?;
+    create_dir_all_async_with_permissions(storage_path).await?;
 
     // 1. Create Test User (Admin) - dynamic or generic fallback
     let user_id = Uuid::new_v4();
@@ -220,7 +221,7 @@ async fn seed_data(pool: &DbPool) -> Result<(), Box<dyn std::error::Error>> {
             "From: {}\r\nTo: hello@maileroo.test\r\nSubject: {}\r\nDate: Mon, 9 Feb 2026 12:00:00 +0000\r\n\r\nThis is a seeded test email for the subject: {}\r\n",
             sender, subject, subject
         );
-        tokio::fs::write(&file_path, content).await?;
+        write_file_async_with_permissions(&file_path, content).await?;
     }
 
     let email_id = Uuid::new_v4();
@@ -255,10 +256,8 @@ async fn seed_data(pool: &DbPool) -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let file_path = storage_path.join(format!("{}.eml", body_key));
-    let messy_content = format!(
-        "From: messy@stylebreaker.com\r\nTo: hello@maileroo.test\r\nSubject: TEST: Messy global CSS!\r\nContent-Type: text/html; charset=utf-8\r\n\r\n<html>\n<head>\n<style>\nbody {{ margin: 0 !important; padding: 0 !important; background-color: purple !important; }}\nh1, h2, h3 {{ color: red !important; font-size: 100px !important; }}\nnav, header, .header {{ display: none !important; }}\n* {{ border: 5px solid lime !important; }}\n</style>\n</head>\n<body>\n<h1>MESSY EMAIL</h1>\n<p>If Shadow DOM is working, this won't break your app's main layout.</p>\n</body>\n</html>\n"
-    );
-    tokio::fs::write(&file_path, messy_content).await?;
+    let messy_content = "From: messy@stylebreaker.com\r\nTo: hello@maileroo.test\r\nSubject: TEST: Messy global CSS!\r\nContent-Type: text/html; charset=utf-8\r\n\r\n<html>\n<head>\n<style>\nbody { margin: 0 !important; padding: 0 !important; background-color: purple !important; }\nh1, h2, h3 { color: red !important; font-size: 100px !important; }\nnav, header, .header { display: none !important; }\n* { border: 5px solid lime !important; }\n</style>\n</head>\n<body>\n<h1>MESSY EMAIL</h1>\n<p>If Shadow DOM is working, this won't break your app's main layout.</p>\n</body>\n</html>\n";
+    write_file_async_with_permissions(&file_path, messy_content).await?;
 
     println!(
         "✨ Seeded admin user: {} with password: {}",

@@ -1,6 +1,7 @@
 use crate::db::{
     ReplyMappingLookup, get_or_create_reply_mapping, get_reply_mapping_by_token, insert_email,
 };
+use crate::fs::write_file_sync_with_permissions;
 use crate::inbound::acceptor::HotReloadAcceptor;
 use crate::outbound::OutboundService;
 use crate::outbound::mime::prepare_reply_for_relay;
@@ -193,7 +194,7 @@ impl SmartBodyBuffer {
         let old_state = std::mem::replace(&mut self.state, BodyBufferState::Memory(Vec::new()));
         match old_state {
             BodyBufferState::Memory(vec) => {
-                std::fs::write(dest_path, &vec)?;
+                write_file_sync_with_permissions(dest_path, &vec)?;
                 self.state = BodyBufferState::Memory(vec);
                 Ok(())
             }

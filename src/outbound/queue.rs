@@ -1,4 +1,5 @@
 use crate::db::DbPool;
+use crate::fs::{create_dir_all_async_with_permissions, write_file_async_with_permissions};
 use crate::outbound::OutboundService;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -23,11 +24,11 @@ pub async fn enqueue_job(
 
     // Create outbound storage directory if not exists
     if let Some(parent) = file_path.parent() {
-        tokio::fs::create_dir_all(parent).await?;
+        create_dir_all_async_with_permissions(parent).await?;
     }
 
     // Save physical file first to prevent dangling DB entries
-    tokio::fs::write(&file_path, body_bytes).await?;
+    write_file_async_with_permissions(&file_path, body_bytes).await?;
 
     if let Err(e) = crate::db::queue::insert_job(pool, id, from_envelope, to_recipient).await {
         // Rollback filesystem if database insert fails
