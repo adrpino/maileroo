@@ -1,6 +1,6 @@
+use crate::fs::create_dir_all_sync_with_permissions;
 use crate::{config, db, inbound, outbound, web};
 use hickory_resolver::TokioResolver;
-use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -135,7 +135,7 @@ impl MailerooServer {
         // Ensure storage directory exists
         if !Path::new(&storage_dir).exists() {
             println!("Creating storage directory: {:?}", storage_dir);
-            fs::create_dir_all(&storage_dir)?;
+            create_dir_all_sync_with_permissions(&storage_dir)?;
         }
 
         let identity_domain = prod_domain.clone();
