@@ -519,3 +519,300 @@ async fn test_send_already_sent_email_fails_and_prevents_file_deletion() {
         assert!(sent_email_file_path.exists(), "The sent email's body file was wrongly deleted from disk!");
     }).await;
 }
+
+#[tokio::test]
+async fn test_attachment_deletion_and_security() {
+    common::run_on_all_dbs(|db| async move {
+        // 1. Setup temporary storage directory
+        let temp_storage_dir = tempfile::tempdir().unwrap();
+
+        // 2. Setup mock test user, alias and a draft email
+        let user = common::create_test_user(&db, "attachment_user@example.com", "password").await;
+        let alias = common::create_test_alias(&db, user.id, "example.com", "attach", "dest@gmail.com").await;
+
+        let _email_id = uuid::Uuid::new_v4();
+        let body_key = uuid::Uuid::new_v4();
+        let received_at_val = time::OffsetDateTime::now_utc();
+
+        // Write a mock raw email body file to the storage directory
+        let email_file_path = temp_storage_dir.path().join(format!("{}.eml", body_key));
+        let mock_eml_content = b"From: sender@example.com\r\nTo: attach@example.com\r\nSubject: Secret File\r\nContent-Type: multipart/mixed; boundary=bound123\r\n\r\n--bound123\r\nContent-Type: text/plain\r\n\r\nHello\r\n--bound123\r\nContent-Type: text/plain; name=secret.txt\r\nContent-Disposition: attachment; filename=secret.txt\r\n\r\nTopSecretData\r\n--bound123--\r\n";
+        tokio::fs::write(&email_file_path, mock_eml_content)
+            .await
+            .unwrap();
+
+        // Parse and extract metadata
+        let (metadata, attachments) = maileroo::inbound::parser::extract_full_metadata(mock_eml_content, "sender@example.com");
+
+        let email = maileroo::db::attachments::insert_email_with_attachments(
+            &db,
+            alias.id,
+            &metadata.sender,
+            &metadata.subject,
+            body_key,
+            Some(received_at_val),
+            metadata.message_id,
+            None,
+            &attachments,
+        ).await.unwrap();
+
+        let email_id = email.id;
+
+        // Fetch attachment metadata to verify it was inserted
+        let db_attachments = maileroo::db::attachments::get_attachments_for_email(&db, email_id).await.unwrap();
+        assert_eq!(db_attachments.len(), 1);
+        let attachment_id = db_attachments[0].id;
+
+        // 3. Create App State
+        let resolver = hickory_resolver::TokioResolver::builder_tokio().unwrap().build().unwrap();
+        let dns_scanner = maileroo::dns::DnsScanner::new(resolver.clone());
+        let outbound = std::sync::Arc::new(maileroo::outbound::OutboundService::new(
+            "srs_secret_key_123".to_string(),
+            resolver,
+            "example.com".to_string(),
+            db.clone(),
+            temp_storage_dir.path().to_path_buf(),
+        ));
+
+        let state = maileroo::web::AppState {
+            db: db.clone(),
+            storage_dir: temp_storage_dir.path().to_path_buf(),
+            dns_scanner,
+            tx: tokio::sync::broadcast::channel::<maileroo::web::DashboardEvent>(100).0,
+            outbound,
+            config: maileroo::config::AppConfig { auto_tls: None },
+        };
+
+        let app_router = maileroo::web::create_app(state).await;
+
+        // 4. Authenticate via login
+        let auth_cookie = common::get_auth_cookie(
+            app_router.clone(),
+            "attachment_user@example.com",
+            "password",
+        )
+        .await;
+        let csrf_token = common::extract_csrf_token(&auth_cookie);
+
+        // Security Test: Accessing the endpoint with proper auth should succeed
+        let download_uri = format!("/dashboard/email/{}/attachment/{}", email_id, attachment_id);
+        let req = axum::http::Request::builder()
+            .method("GET")
+            .uri(&download_uri)
+            .header(axum::http::header::COOKIE, &auth_cookie)
+            .body(axum::body::Body::empty())
+            .unwrap();
+
+        let response = app_router.clone().oneshot(req).await.unwrap();
+        assert_eq!(response.status(), axum::http::StatusCode::OK);
+        
+        let headers = response.headers();
+        assert_eq!(headers.get("Content-Disposition").unwrap().to_str().unwrap(), "attachment; filename=\"secret.txt\"");
+        assert_eq!(headers.get("X-Content-Type-Options").unwrap().to_str().unwrap(), "nosniff");
+
+        // Security Test: Another user trying to access the endpoint should fail (404/403)
+        let _hacker = common::create_test_user(&db, "hacker@example.com", "password").await;
+        let hacker_cookie = common::get_auth_cookie(
+            app_router.clone(),
+            "hacker@example.com",
+            "password",
+        )
+        .await;
+
+        let req = axum::http::Request::builder()
+            .method("GET")
+            .uri(&download_uri)
+            .header(axum::http::header::COOKIE, &hacker_cookie)
+            .body(axum::body::Body::empty())
+            .unwrap();
+
+        let response = app_router.clone().oneshot(req).await.unwrap();
+        assert_eq!(response.status(), axum::http::StatusCode::NOT_FOUND);
+
+        // Deletion Test: Delete the email
+        let req = axum::http::Request::builder()
+            .method("DELETE")
+            .uri(format!("/emails/{}", email_id))
+            .header(axum::http::header::COOKIE, &auth_cookie)
+            .header("X-CSRF-Token", csrf_token)
+            .body(axum::body::Body::empty())
+            .unwrap();
+
+        let response = app_router.oneshot(req).await.unwrap();
+        assert_eq!(response.status(), axum::http::StatusCode::OK);
+
+        // Verify attachments are gone (cascade)
+        let db_attachments_after = maileroo::db::attachments::get_attachments_for_email(&db, email_id).await.unwrap();
+        assert_eq!(db_attachments_after.len(), 0, "Attachment rows were not cascaded deleted");
+
+        // Verify file is gone
+        let mut file_deleted = false;
+        for _ in 0..100 {
+            if !email_file_path.exists() {
+                file_deleted = true;
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+        assert!(file_deleted, "Storage file was not physically deleted from disk!");
+
+    }).await;
+}
+
+#[tokio::test]
+async fn test_attachment_part_index_resolution() {
+    common::run_on_all_dbs(|db| async move {
+        let temp_storage_dir = tempfile::tempdir().unwrap();
+
+        let user = common::create_test_user(&db, "partindex@example.com", "password").await;
+        let alias = common::create_test_alias(&db, user.id, "example.com", "parts", "dest@gmail.com").await;
+
+        let body_key = uuid::Uuid::new_v4();
+        let received_at_val = time::OffsetDateTime::now_utc();
+
+        let email_file_path = temp_storage_dir.path().join(format!("{}.eml", body_key));
+        let mock_eml_content = b"From: sender@example.com\r\nTo: parts@example.com\r\nSubject: Files\r\nContent-Type: multipart/mixed; boundary=bound123\r\n\r\n--bound123\r\nContent-Type: text/plain; name=first.txt\r\nContent-Disposition: attachment; filename=first.txt\r\n\r\nFileOne\r\n--bound123\r\nContent-Type: text/plain; name=second.txt\r\nContent-Disposition: attachment; filename=second.txt\r\n\r\nFileTwo\r\n--bound123--\r\n";
+        tokio::fs::write(&email_file_path, mock_eml_content).await.unwrap();
+
+        let (metadata, attachments) = maileroo::inbound::parser::extract_full_metadata(mock_eml_content, "sender@example.com");
+
+        let email = maileroo::db::attachments::insert_email_with_attachments(
+            &db, alias.id, &metadata.sender, &metadata.subject, body_key,
+            Some(received_at_val), metadata.message_id, None, &attachments,
+        ).await.unwrap();
+
+        let email_id = email.id;
+
+        let db_attachments = maileroo::db::attachments::get_attachments_for_email(&db, email_id).await.unwrap();
+        assert_eq!(db_attachments.len(), 2);
+        
+        let att1 = db_attachments.iter().find(|a| a.filename.as_deref() == Some("first.txt")).unwrap();
+        let att2 = db_attachments.iter().find(|a| a.filename.as_deref() == Some("second.txt")).unwrap();
+
+        let resolver = hickory_resolver::TokioResolver::builder_tokio().unwrap().build().unwrap();
+        let dns_scanner = maileroo::dns::DnsScanner::new(resolver.clone());
+        let outbound = std::sync::Arc::new(maileroo::outbound::OutboundService::new(
+            "srs_secret_key_123".to_string(), resolver, "example.com".to_string(),
+            db.clone(), temp_storage_dir.path().to_path_buf(),
+        ));
+
+        let state = maileroo::web::AppState {
+            db: db.clone(),
+            storage_dir: temp_storage_dir.path().to_path_buf(),
+            dns_scanner,
+            tx: tokio::sync::broadcast::channel::<maileroo::web::DashboardEvent>(100).0,
+            outbound,
+            config: maileroo::config::AppConfig { auto_tls: None },
+        };
+
+        let app_router = maileroo::web::create_app(state).await;
+
+        let auth_cookie = common::get_auth_cookie(app_router.clone(), "partindex@example.com", "password").await;
+
+        // Fetch First Attachment
+        let req1 = axum::http::Request::builder()
+            .method("GET")
+            .uri(&format!("/dashboard/email/{}/attachment/{}", email_id, att1.id))
+            .header(axum::http::header::COOKIE, &auth_cookie)
+            .body(axum::body::Body::empty())
+            .unwrap();
+
+        let response1 = app_router.clone().oneshot(req1).await.unwrap();
+        assert_eq!(response1.status(), axum::http::StatusCode::OK);
+        let body1 = axum::body::to_bytes(response1.into_body(), usize::MAX).await.unwrap();
+        assert_eq!(&body1[..], b"FileOne");
+
+        // Fetch Second Attachment
+        let req2 = axum::http::Request::builder()
+            .method("GET")
+            .uri(&format!("/dashboard/email/{}/attachment/{}", email_id, att2.id))
+            .header(axum::http::header::COOKIE, &auth_cookie)
+            .body(axum::body::Body::empty())
+            .unwrap();
+
+        let response2 = app_router.oneshot(req2).await.unwrap();
+        assert_eq!(response2.status(), axum::http::StatusCode::OK);
+        let body2 = axum::body::to_bytes(response2.into_body(), usize::MAX).await.unwrap();
+        assert_eq!(&body2[..], b"FileTwo");
+
+    }).await;
+}
+
+#[tokio::test]
+async fn test_inline_image_e2e_dashboard_render() {
+    common::run_on_all_dbs(|db| async move {
+        let temp_storage_dir = tempfile::tempdir().unwrap();
+
+        let user = common::create_test_user(&db, "inlinee2e@example.com", "password").await;
+        let alias = common::create_test_alias(&db, user.id, "example.com", "inline", "dest@gmail.com").await;
+
+        let body_key = uuid::Uuid::new_v4();
+        let received_at_val = time::OffsetDateTime::now_utc();
+
+        let email_file_path = temp_storage_dir.path().join(format!("{}.eml", body_key));
+        let mock_eml_content = b"From: sender@example.com\r\nTo: inline@example.com\r\nSubject: Images\r\nContent-Type: multipart/related; boundary=bound123\r\n\r\n--bound123\r\nContent-Type: text/html\r\n\r\n<html><body><img src=\"cid:logo-123\"></body></html>\r\n--bound123\r\nContent-Type: image/png\r\nContent-ID: <logo-123>\r\n\r\nFakeImageBytes\r\n--bound123--\r\n";
+        tokio::fs::write(&email_file_path, mock_eml_content).await.unwrap();
+
+        let (metadata, attachments) = maileroo::inbound::parser::extract_full_metadata(mock_eml_content, "sender@example.com");
+
+        let email = maileroo::db::attachments::insert_email_with_attachments(
+            &db, alias.id, &metadata.sender, &metadata.subject, body_key,
+            Some(received_at_val), metadata.message_id, None, &attachments,
+        ).await.unwrap();
+
+        let email_id = email.id;
+
+        let resolver = hickory_resolver::TokioResolver::builder_tokio().unwrap().build().unwrap();
+        let dns_scanner = maileroo::dns::DnsScanner::new(resolver.clone());
+        let outbound = std::sync::Arc::new(maileroo::outbound::OutboundService::new(
+            "srs_secret_key_123".to_string(), resolver, "example.com".to_string(),
+            db.clone(), temp_storage_dir.path().to_path_buf(),
+        ));
+
+        let state = maileroo::web::AppState {
+            db: db.clone(),
+            storage_dir: temp_storage_dir.path().to_path_buf(),
+            dns_scanner,
+            tx: tokio::sync::broadcast::channel::<maileroo::web::DashboardEvent>(100).0,
+            outbound,
+            config: maileroo::config::AppConfig { auto_tls: None },
+        };
+
+        let app_router = maileroo::web::create_app(state).await;
+        let auth_cookie = common::get_auth_cookie(app_router.clone(), "inlinee2e@example.com", "password").await;
+
+        // Fetch Email Detail Page
+        let req = axum::http::Request::builder()
+            .method("GET")
+            .uri(&format!("/emails/{}", email_id))
+            .header(axum::http::header::COOKIE, &auth_cookie)
+            .body(axum::body::Body::empty())
+            .unwrap();
+
+        let response = app_router.clone().oneshot(req).await.unwrap();
+        assert_eq!(response.status(), axum::http::StatusCode::OK);
+        
+        let html_bytes = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let html_str = String::from_utf8_lossy(&html_bytes);
+        // Verify HTML body cid: rewrite (Askama escapes " as &#34;)
+        assert!(html_str.contains(&format!("src=&#34;/dashboard/email/{}/inline/logo-123&#34;", email_id)));
+
+        // Verify Inline endpoint
+        let inline_req = axum::http::Request::builder()
+            .method("GET")
+            .uri(&format!("/dashboard/email/{}/inline/logo-123", email_id))
+            .header(axum::http::header::COOKIE, &auth_cookie)
+            .body(axum::body::Body::empty())
+            .unwrap();
+
+        let inline_resp = app_router.oneshot(inline_req).await.unwrap();
+        let status = inline_resp.status();
+        let img_bytes = axum::body::to_bytes(inline_resp.into_body(), usize::MAX).await.unwrap();
+        if status != axum::http::StatusCode::OK {
+            println!("INLINE ERROR: {}", String::from_utf8_lossy(&img_bytes));
+        }
+        assert_eq!(status, axum::http::StatusCode::OK);
+        assert_eq!(&img_bytes[..], b"FakeImageBytes");
+
+    }).await;
+}

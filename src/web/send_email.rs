@@ -200,6 +200,7 @@ pub async fn submit_email_handler(
         message_id: Some(message_id.clone()),
         in_reply_to: None,
         references: None,
+        attachments: vec![],
     };
 
     let raw_mime = build_mime(&mime_email);

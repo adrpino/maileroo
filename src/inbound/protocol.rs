@@ -1,8 +1,9 @@
 use crate::db::{
-    ReplyMappingLookup, get_or_create_reply_mapping, get_reply_mapping_by_token, insert_email,
+    ReplyMappingLookup, get_or_create_reply_mapping, get_reply_mapping_by_token,
 };
 use crate::fs::write_file_sync_with_permissions;
 use crate::inbound::acceptor::HotReloadAcceptor;
+use crate::inbound::parser::{extract_full_metadata, AttachmentMetadata, EmailMetadata};
 use crate::outbound::OutboundService;
 use crate::outbound::mime::prepare_reply_for_relay;
 use pin_project_lite::pin_project;
@@ -90,13 +91,7 @@ enum SmtpState {
     ReadingBody,
 }
 
-pub struct EmailMetadata {
-    pub sender: String,
-    pub subject: String,
-    pub message_id: Option<String>,
-    pub in_reply_to: Option<String>,
-    pub references: Vec<String>,
-}
+
 
 pub struct SmartBodyBuffer {
     state: BodyBufferState,
@@ -176,16 +171,16 @@ impl SmartBodyBuffer {
         self.bytes_written
     }
 
-    pub fn extract_metadata(&self, envelope_sender: &str) -> Result<EmailMetadata, std::io::Error> {
+    pub fn extract_full_metadata(&self, envelope_sender: &str) -> Result<(EmailMetadata, Vec<AttachmentMetadata>), std::io::Error> {
         match &self.state {
-            BodyBufferState::Memory(vec) => Ok(SmtpSession::extract_metadata(vec, envelope_sender)),
+            BodyBufferState::Memory(vec) => Ok(extract_full_metadata(vec, envelope_sender)),
             BodyBufferState::Disk { temp_file, .. } => {
                 use std::io::Read;
                 let file = temp_file.reopen()?;
-                let mut handle = file.take(131_072); // Take first 128KB (more than enough for headers)
+                let mut handle = file; // Take the full file because we need to parse attachments
                 let mut buf = Vec::new();
                 handle.read_to_end(&mut buf)?;
-                Ok(SmtpSession::extract_metadata(&buf, envelope_sender))
+                Ok(extract_full_metadata(&buf, envelope_sender))
             }
         }
     }
@@ -273,52 +268,6 @@ impl SmtpSession {
         })
     }
 
-    /// Extracts metadata from the email body for threading and display.
-    fn extract_metadata(body: &[u8], envelope_sender: &str) -> EmailMetadata {
-        let message = mail_parser::MessageParser::default().parse(body);
-
-        let subject = message
-            .as_ref()
-            .and_then(|m| m.subject().map(|s| s.to_string()))
-            .unwrap_or_else(|| "No Subject".to_string());
-
-        let friendly_sender = message
-            .as_ref()
-            .and_then(|m| m.from())
-            .and_then(|f| f.first())
-            .and_then(|a| a.address())
-            .map(|s| s.to_string());
-
-        let sender = friendly_sender.unwrap_or_else(|| envelope_sender.to_string());
-
-        let message_id = message
-            .as_ref()
-            .and_then(|m| m.message_id())
-            .map(|id| crate::outbound::mime::format_message_id(id));
-
-        let in_reply_to = message
-            .as_ref()
-            .and_then(|m| m.in_reply_to().as_text())
-            .map(|id| crate::outbound::mime::format_message_id(id));
-
-        let references = message
-            .as_ref()
-            .and_then(|m| m.references().as_text())
-            .map(|r| {
-                r.split_whitespace()
-                    .map(|id| crate::outbound::mime::format_message_id(id))
-                    .collect()
-            })
-            .unwrap_or_default();
-
-        EmailMetadata {
-            sender,
-            subject,
-            message_id,
-            in_reply_to,
-            references,
-        }
-    }
 
     pub fn new(
         socket: TcpStream,
@@ -616,7 +565,7 @@ impl SmtpSession {
 
             // 1. Extract metadata and determine correct display sender
             let envelope_sender = self.sender.as_deref().unwrap_or_default();
-            let metadata = self.body_buffer.extract_metadata(envelope_sender)?;
+            let (metadata, attachments) = self.body_buffer.extract_full_metadata(envelope_sender)?;
 
             let body_key = uuid::Uuid::new_v4();
             let path = self.storage_dir.join(format!("{}.eml", body_key));
@@ -639,7 +588,7 @@ impl SmtpSession {
                 .flatten();
 
             tracing::info!("Email from sender: {}", &metadata.sender);
-            match insert_email(
+            match crate::db::attachments::insert_email_with_attachments(
                 &self.db_pool,
                 alias_id,
                 &metadata.sender,
@@ -648,6 +597,7 @@ impl SmtpSession {
                 None,
                 metadata.message_id,
                 thread_id,
+                &attachments,
             )
             .await
             {
@@ -930,7 +880,7 @@ mod tests {
     #[test]
     fn test_metadata_extraction_standard() {
         let body = b"From: alice@example.com\r\nSubject: Hello\r\n\r\nBody content";
-        let metadata = SmtpSession::extract_metadata(body, "bounce@example.com");
+        let (metadata, _) = extract_full_metadata(body, "bounce@example.com");
         assert_eq!(metadata.sender, "alice@example.com");
         assert_eq!(metadata.subject, "Hello");
     }
@@ -940,7 +890,7 @@ mod tests {
         let body =
             b"From: Greenhouse <no-reply@greenhouse.io>\r\nSubject: Job Alert\r\n\r\nContent";
         let envelope = "bounce+7bf24a.eb6b8a-hello=example.com@us.greenhouse-mail.io";
-        let metadata = SmtpSession::extract_metadata(body, envelope);
+        let (metadata, _) = extract_full_metadata(body, envelope);
 
         // Should favor the internal From header
         assert_eq!(metadata.sender, "no-reply@greenhouse.io");
@@ -951,7 +901,7 @@ mod tests {
     fn test_metadata_extraction_fallback() {
         let body = b"Subject: Missing From Header\r\n\r\nOnly subject here";
         let envelope = "real-sender@domain.com";
-        let metadata = SmtpSession::extract_metadata(body, envelope);
+        let (metadata, _) = extract_full_metadata(body, envelope);
 
         assert_eq!(metadata.sender, "real-sender@domain.com");
         assert_eq!(metadata.subject, "Missing From Header");
@@ -960,7 +910,7 @@ mod tests {
     #[test]
     fn test_metadata_extraction_no_subject() {
         let body = b"From: someone@somewhere.com\r\n\r\nNo subject line";
-        let metadata = SmtpSession::extract_metadata(body, "envelope@test.com");
+        let (metadata, _) = extract_full_metadata(body, "envelope@test.com");
 
         assert_eq!(metadata.sender, "someone@somewhere.com");
         assert_eq!(metadata.subject, "No Subject");
@@ -976,7 +926,7 @@ mod tests {
             .unwrap();
         assert!(matches!(buffer.state, BodyBufferState::Memory(_)));
 
-        let metadata = buffer.extract_metadata("sender@test.com").unwrap();
+        let (metadata, _) = buffer.extract_full_metadata("sender@test.com").unwrap();
         assert_eq!(metadata.subject, "Small Email");
 
         let content = buffer.get_content_bytes().unwrap();
@@ -1022,7 +972,7 @@ mod tests {
         assert!(matches!(buffer.state, BodyBufferState::Disk { .. }));
 
         // Extract metadata (should read only the top part from disk, not the full 200KB body)
-        let metadata = buffer.extract_metadata("envelope@sender.com").unwrap();
+        let (metadata, _) = buffer.extract_full_metadata("envelope@sender.com").unwrap();
         assert_eq!(metadata.sender, "external@sender.com");
         assert_eq!(metadata.subject, "Header Test");
     }

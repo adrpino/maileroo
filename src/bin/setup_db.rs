@@ -4,7 +4,9 @@ use argon2::{
 };
 use dotenvy::dotenv;
 use maileroo::db::{DbPool, init_pool, run_migrations};
+use maileroo::db::attachments::insert_email_with_attachments;
 use maileroo::fs::{create_dir_all_async_with_permissions, write_file_async_with_permissions};
+use maileroo::inbound::parser::extract_full_metadata;
 use std::env;
 use uuid::Uuid;
 
@@ -257,7 +259,28 @@ async fn seed_data(pool: &DbPool) -> Result<(), Box<dyn std::error::Error>> {
 
     let file_path = storage_path.join(format!("{}.eml", body_key));
     let messy_content = "From: messy@stylebreaker.com\r\nTo: hello@maileroo.test\r\nSubject: TEST: Messy global CSS!\r\nContent-Type: text/html; charset=utf-8\r\n\r\n<html>\n<head>\n<style>\nbody { margin: 0 !important; padding: 0 !important; background-color: purple !important; }\nh1, h2, h3 { color: red !important; font-size: 100px !important; }\nnav, header, .header { display: none !important; }\n* { border: 5px solid lime !important; }\n</style>\n</head>\n<body>\n<h1>MESSY EMAIL</h1>\n<p>If Shadow DOM is working, this won't break your app's main layout.</p>\n</body>\n</html>\n";
-    write_file_async_with_permissions(&file_path, messy_content).await?;
+    write_file_async_with_permissions(&file_path, messy_content.to_string()).await?;
+
+    // --- Seed Attachment Test Email ---
+    let body_key = Uuid::new_v4();
+    let email_file_path = storage_path.join(format!("{}.eml", body_key));
+    let mock_eml_content = b"From: files@example.com\r\nTo: hello@maileroo.test\r\nSubject: UI Attachment Test\r\nContent-Type: multipart/mixed; boundary=mixed123\r\n\r\n--mixed123\r\nContent-Type: multipart/related; boundary=related123\r\n\r\n--related123\r\nContent-Type: text/html; charset=utf-8\r\n\r\n<html><body><p>Here is an inline company logo!</p><img src=\"cid:company-logo\" style=\"max-width: 200px; border: 1px solid #ccc;\"/><p>Also see the attached invoice.</p></body></html>\r\n--related123\r\nContent-Type: image/png\r\nContent-ID: <company-logo>\r\nContent-Disposition: inline\r\n\r\n\x89\x50\x4e\x47\x0d\x0a\x1a\x0a\x00\x00\x00\x0d\x49\x48\x44\x52\x00\x00\x00\x01\x00\x00\x00\x01\x08\x06\x00\x00\x00\x1f\x15\xc4\x89\x00\x00\x00\x0d\x49\x44\x41\x54\x78\xda\x63\x64\x64\x64\x60\x00\x00\x00\x0e\x00\x02\x42\x33\xf8\x41\x00\x00\x00\x00\x49\x45\x4e\x44\xae\x42\x60\x82\r\n--related123--\r\n--mixed123\r\nContent-Type: application/pdf; name=invoice.pdf\r\nContent-Disposition: attachment; filename=invoice.pdf\r\n\r\n%PDF-1.4\n1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> >> >> >>\nendobj\n4 0 obj\n<< /Length 53 >>\nstream\nBT\n/F1 24 Tf\n100 700 Td\n(Fake Invoice PDF Content) Tj\nET\nendstream\nendobj\nxref\n0 5\n0000000000 65535 f \n0000000009 00000 n \n0000000058 00000 n \n0000000115 00000 n \n0000000289 00000 n \ntrailer\n<< /Size 5 /Root 1 0 R >>\nstartxref\n391\n%%EOF\n\r\n--mixed123--\r\n";
+    write_file_async_with_permissions(&email_file_path, String::from_utf8_lossy(mock_eml_content).to_string()).await?;
+
+    let (metadata, attachments) = extract_full_metadata(mock_eml_content, "files@example.com");
+
+    insert_email_with_attachments(
+        pool,
+        alias_id,
+        &metadata.sender,
+        &metadata.subject,
+        body_key,
+        Some(time::OffsetDateTime::now_utc()),
+        metadata.message_id,
+        None,
+        &attachments,
+    )
+    .await?;
 
     println!(
         "✨ Seeded admin user: {} with password: {}",

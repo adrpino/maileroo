@@ -1,5 +1,6 @@
 pub mod aliases;
 pub mod api_keys;
+pub mod attachments;
 pub mod domains;
 pub mod queue;
 pub mod replies;
@@ -173,6 +174,7 @@ pub async fn get_email_by_id(
                     e.forwarded,
                     e.message_id,
                     e.thread_id,
+                    e.has_attachments,
                     a.user_id
                  FROM received_emails e 
                  JOIN aliases a on a.id = e.alias_id
@@ -200,6 +202,7 @@ pub async fn get_email_by_id(
                     e.forwarded,
                     e.message_id,
                     e.thread_id,
+                    e.has_attachments,
                     a.user_id
                  FROM received_emails e 
                  JOIN aliases a on a.id = e.alias_id
@@ -274,6 +277,7 @@ pub async fn get_email_by_user_id(
                     e.forwarded,
                     e.message_id,
                     e.thread_id,
+                    e.has_attachments,
                     a.user_id
                  FROM received_emails e 
                  JOIN aliases a on a.id = e.alias_id
@@ -309,6 +313,7 @@ pub async fn get_email_by_user_id(
                     e.forwarded,
                     e.message_id,
                     e.thread_id,
+                    e.has_attachments,
                     a.user_id
                  FROM received_emails e 
                  JOIN aliases a on a.id = e.alias_id
@@ -456,7 +461,9 @@ pub async fn get_child_emails(
                     e.viewed,
                     e.forwarded,
                     e.message_id,
-                    e.thread_id
+                    e.thread_id,
+                    e.has_attachments,
+                    a.user_id
                  FROM received_emails e 
                  JOIN aliases a on a.id = e.alias_id
                  JOIN domains d on d.id = a.domain_id
@@ -483,7 +490,9 @@ pub async fn get_child_emails(
                     e.viewed,
                     e.forwarded,
                     e.message_id,
-                    e.thread_id
+                    e.thread_id,
+                    e.has_attachments,
+                    a.user_id
                  FROM received_emails e 
                  JOIN aliases a on a.id = e.alias_id
                  JOIN domains d on d.id = a.domain_id
@@ -550,7 +559,8 @@ pub async fn insert_email(
                     i.viewed as viewed,
                     i.forwarded as forwarded,
                     i.message_id,
-                    i.thread_id
+                    i.thread_id,
+                    i.has_attachments
                 FROM inserted i
                 JOIN aliases a ON i.alias_id = a.id
                 JOIN domains d ON a.domain_id = d.id"#,
@@ -620,7 +630,9 @@ pub async fn insert_email(
                     e.viewed,
                     e.forwarded,
                     e.message_id,
-                    e.thread_id
+                    e.thread_id,
+                    e.has_attachments,
+                    a.user_id
                 FROM received_emails e
                 JOIN aliases a ON e.alias_id = a.id
                 JOIN domains d ON a.domain_id = d.id

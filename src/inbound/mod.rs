@@ -1,5 +1,6 @@
 pub mod acceptor;
 pub mod blocklist;
+pub mod parser;
 pub mod protocol;
 pub mod rate_limit;
 
