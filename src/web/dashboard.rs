@@ -10,6 +10,7 @@ use serde::Deserialize;
 use std::sync::Arc;
 use uuid::Uuid;
 
+use crate::db::attachments::{get_attachment_by_id, get_attachments_for_email};
 use crate::db::{
     delete_email_by_id, get_email_by_id, get_email_by_user_id, get_email_count_by_user_id,
 };
@@ -34,6 +35,7 @@ pub struct DisplayEmail {
     pub is_sent_folder: bool,
     pub is_viewed: bool,
     pub status: Option<crate::db::sent_emails::EmailStatus>,
+    pub has_attachments: bool,
 }
 
 #[derive(Template)]
@@ -120,6 +122,7 @@ pub async fn dashboard_handler(
                 is_sent_folder: true,
                 is_viewed: true,
                 status: Some(email.status),
+                has_attachments: false,
             })
             .collect();
 
@@ -165,6 +168,7 @@ pub async fn dashboard_handler(
                 is_sent_folder: false,
                 is_viewed: email.viewed,
                 status: None,
+                has_attachments: email.has_attachments,
             })
             .collect();
 
@@ -388,6 +392,7 @@ pub struct EmailDetailTemplate {
     pub is_outbound: bool,
     pub locale: Locale,
     pub replies: Vec<ThreadMessage>,
+    pub attachments: Vec<crate::db::attachments::AttachmentRow>,
 }
 
 impl IntoResponse for EmailDetailTemplate {
@@ -427,6 +432,7 @@ pub async fn dashboard_sse_handler(
                             is_sent_folder: false,
                             is_viewed: email.viewed,
                             status: None,
+                            has_attachments: email.has_attachments,
                         };
                         let template = crate::web::handlers::EmailRowTemplate { email: display_email, locale: locale.clone() };
                         if let Ok(html) = askama::Template::render(&template) {
@@ -462,6 +468,151 @@ pub async fn dashboard_sse_handler(
     response
 }
 
+pub async fn download_attachment_handler(
+    State(state): State<Arc<AppState>>,
+    Path((email_id, attachment_id)): Path<(Uuid, Uuid)>,
+    user: AuthenticatedUser,
+) -> Response {
+    use axum::http::header;
+    use mail_parser::MessageParser;
+
+    // 1. Authorize: Check if user owns the email
+    let email = match crate::db::get_any_email(&state.db, email_id, user.user_id).await {
+        Ok(Some(e)) => e,
+        _ => return (StatusCode::NOT_FOUND, "Email not found").into_response(),
+    };
+
+    // 2. Fetch the attachment metadata
+    let attachment = match get_attachment_by_id(&state.db, attachment_id).await {
+        Ok(Some(a)) if a.email_id == email_id => a,
+        _ => return (StatusCode::NOT_FOUND, "Attachment not found").into_response(),
+    };
+
+    // 3. Read the email file
+    let body_key = match email {
+        crate::db::AnyEmail::Received(e) => e.body_key,
+        crate::db::AnyEmail::Sent(e) => e.body_key,
+    };
+
+    let path = state.storage_dir.join(format!("{}.eml", body_key));
+    let bytes = match tokio::fs::read(&path).await {
+        Ok(b) => b,
+        Err(_) => return (StatusCode::NOT_FOUND, "File not found").into_response(),
+    };
+
+    // 4. Parse the email and get the attachment content
+    let message = match MessageParser::default().parse(&bytes) {
+        Some(m) => m,
+        None => {
+            return (StatusCode::INTERNAL_SERVER_ERROR, "Failed to parse email").into_response();
+        }
+    };
+
+    let part = match message.attachments().nth(attachment.part_index as usize) {
+        Some(p) => p,
+        None => {
+            return (StatusCode::NOT_FOUND, "Attachment part not found in file").into_response();
+        }
+    };
+
+    let data = part.contents().to_vec();
+
+    // 5. Send with safe headers
+    let raw = attachment.filename.as_deref().unwrap_or("attachment");
+    let ascii = crate::outbound::mime::sanitize_header(raw).replace('"', "");
+
+    match Response::builder()
+        .header(
+            header::CONTENT_DISPOSITION,
+            format!("attachment; filename=\"{}\"", ascii),
+        )
+        .header(header::CONTENT_TYPE, "application/octet-stream")
+        .header(header::X_CONTENT_TYPE_OPTIONS, "nosniff")
+        .body(Body::from(data))
+    {
+        Ok(resp) => resp,
+        Err(_) => (StatusCode::INTERNAL_SERVER_ERROR, "bad header").into_response(),
+    }
+}
+
+pub async fn inline_image_handler(
+    State(state): State<Arc<AppState>>,
+    Path((email_id, content_id)): Path<(Uuid, String)>,
+    user: AuthenticatedUser,
+) -> Response {
+    use axum::http::header;
+    use mail_parser::MessageParser;
+
+    let email = match crate::db::get_any_email(&state.db, email_id, user.user_id).await {
+        Ok(Some(e)) => e,
+        _ => return (StatusCode::NOT_FOUND, "Email not found").into_response(),
+    };
+
+    let attachments = match get_attachments_for_email(&state.db, email_id).await {
+        Ok(a) => a,
+        Err(_) => return (StatusCode::INTERNAL_SERVER_ERROR, "DB Error").into_response(),
+    };
+
+    let attachment = match attachments
+        .into_iter()
+        .find(|a| a.content_id.as_deref() == Some(&content_id) && a.is_inline)
+    {
+        Some(a) => a,
+        None => return (StatusCode::NOT_FOUND, "Inline image not found").into_response(),
+    };
+
+    let body_key = match email {
+        crate::db::AnyEmail::Received(e) => e.body_key,
+        crate::db::AnyEmail::Sent(e) => e.body_key,
+    };
+
+    let path = state.storage_dir.join(format!("{}.eml", body_key));
+    let bytes = match tokio::fs::read(&path).await {
+        Ok(b) => b,
+        Err(_) => return (StatusCode::NOT_FOUND, "File not found").into_response(),
+    };
+
+    let message = match MessageParser::default().parse(&bytes) {
+        Some(m) => m,
+        None => {
+            return (StatusCode::INTERNAL_SERVER_ERROR, "Failed to parse email").into_response();
+        }
+    };
+
+    let part = match message.attachments().nth(attachment.part_index as usize) {
+        Some(p) => p,
+        None => {
+            return (StatusCode::NOT_FOUND, "Attachment part not found in file").into_response();
+        }
+    };
+
+    let data = part.contents().to_vec();
+
+    // Serve with original content type (must be image)
+    let content_type = crate::outbound::mime::sanitize_header(
+        &attachment
+            .content_type
+            .unwrap_or_else(|| "application/octet-stream".to_string()),
+    );
+    if !content_type.starts_with("image/") {
+        tracing::error!("Rejected inline image. Content type: '{}'", content_type);
+        return (
+            StatusCode::BAD_REQUEST,
+            format!("Not an image: {}", content_type),
+        )
+            .into_response();
+    }
+
+    match Response::builder()
+        .header(header::CONTENT_TYPE, content_type)
+        .header(header::X_CONTENT_TYPE_OPTIONS, "nosniff")
+        .body(Body::from(data))
+    {
+        Ok(resp) => resp,
+        Err(_) => (StatusCode::INTERNAL_SERVER_ERROR, "bad header").into_response(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -487,6 +638,7 @@ mod tests {
             is_sent_folder: false,
             is_viewed: false,
             status: None,
+            has_attachments: false,
         };
 
         let template = crate::web::handlers::EmailRowTemplate {
@@ -530,6 +682,7 @@ mod tests {
             is_sent_folder: true,
             is_viewed: true,
             status: Some(sent_row.status.clone()),
+            has_attachments: false,
         };
 
         assert_eq!(display_email.is_sent_folder, true);
@@ -551,6 +704,7 @@ mod tests {
             is_outbound: true,
             locale: Locale::En,
             replies: vec![],
+            attachments: vec![],
         };
 
         assert!(template.is_outbound);

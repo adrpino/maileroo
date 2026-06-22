@@ -6,6 +6,7 @@ pub mod auth;
 pub mod autotls;
 pub mod dashboard;
 pub mod dkim;
+pub mod email_body;
 pub mod handlers;
 pub mod i18n;
 pub mod names;
@@ -27,6 +28,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use uuid::Uuid;
 
+use crate::db::attachments::get_attachments_for_email;
 use crate::dns::DnsScanner;
 use axum_server::tls_rustls::RustlsConfig;
 
@@ -70,6 +72,7 @@ pub struct ReceivedEmail {
     pub forwarded: bool,
     pub message_id: Option<String>,
     pub thread_id: Option<uuid::Uuid>,
+    pub has_attachments: bool,
 }
 
 pub enum ThreadMessage {
@@ -488,6 +491,14 @@ pub async fn create_app(state: AppState) -> Router {
             get(dashboard::delete_email_confirm_handler),
         )
         .route(
+            "/dashboard/email/{email_id}/attachment/{attachment_id}",
+            get(dashboard::download_attachment_handler),
+        )
+        .route(
+            "/dashboard/email/{email_id}/inline/{*content_id}",
+            get(dashboard::inline_image_handler),
+        )
+        .route(
             "/aliases/{id}/toggle-forward",
             post(handlers::toggle_alias_forward_handler),
         )
@@ -648,7 +659,7 @@ async fn get_email(
                         .or_else(|| message.body_text(0))
                         .unwrap_or_default();
 
-                    let body = sanitize_email_body(&raw_body);
+                    let body = email_body::sanitize_email_body(&raw_body, email_id);
                     let date = message.date().map(|d| d.to_rfc822()).unwrap_or_default();
 
                     let alias_address =
@@ -662,6 +673,10 @@ async fn get_email(
                     // --- Threading Logic ---
                     let replies = fetch_thread_messages(&state, email_id).await;
 
+                    let attachments = get_attachments_for_email(&state.db, email_id)
+                        .await
+                        .unwrap_or_default();
+
                     EmailDetailTemplate {
                         id: email_id,
                         sender,
@@ -673,6 +688,7 @@ async fn get_email(
                         is_outbound: false,
                         locale,
                         replies,
+                        attachments,
                     }
                     .into_response()
                 }
@@ -709,7 +725,7 @@ async fn get_email(
                         .map(|s| s.to_string())
                         .unwrap_or_else(|| String::from_utf8_lossy(&bytes).to_string());
 
-                    let body = sanitize_email_body(&raw_body);
+                    let body = email_body::sanitize_email_body(&raw_body, email_id);
 
                     EmailDetailTemplate {
                         id: email_id,
@@ -722,6 +738,7 @@ async fn get_email(
                         is_outbound: true,
                         locale,
                         replies: vec![],
+                        attachments: vec![],
                     }
                     .into_response()
                 }
@@ -739,20 +756,6 @@ async fn get_email(
             }
         }
     }
-}
-
-fn sanitize_email_body(raw_body: &str) -> String {
-    let mut builder = ammonia::Builder::default();
-    builder
-        .add_generic_attributes(&["style", "class", "id"])
-        .rm_clean_content_tags(&["style"])
-        .add_tags(&["style"])
-        .link_rel(Some("noopener noreferrer"));
-
-    let sanitized = builder.clean(raw_body).to_string();
-
-    let re = regex::Regex::new(r"\n{3,}").unwrap();
-    re.replace_all(&sanitized, "\n\n").to_string()
 }
 
 async fn fetch_thread_messages(state: &AppState, email_id: Uuid) -> Vec<ThreadMessage> {
@@ -783,7 +786,7 @@ async fn fetch_thread_messages(state: &AppState, email_id: Uuid) -> Vec<ThreadMe
                 .or_else(|| child_msg.body_text(0))
                 .unwrap_or_default();
 
-            let mut child_body = sanitize_email_body(&child_raw_body);
+            let mut child_body = email_body::sanitize_email_body(&child_raw_body, child.id);
 
             // Lazy-load swapping for inbound replies
             if child_body.contains(" src=") {
@@ -887,6 +890,7 @@ mod tests {
             message_id: None,
             thread_id: None,
             last_activity_at: now,
+            has_attachments: false,
         };
 
         let json = serde_json::to_value(&email).unwrap();

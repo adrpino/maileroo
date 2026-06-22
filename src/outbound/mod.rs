@@ -144,6 +144,7 @@ impl OutboundService {
             message_id: new_message_id,
             in_reply_to: original_message_id.clone(),
             references: original_message_id,
+            attachments: vec![],
         };
 
         let mime = build_mime(&email);

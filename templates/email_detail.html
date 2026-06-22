@@ -292,8 +292,34 @@
         </div>
     </div>
 
+    {% if attachments.len() > 0 %}
+    <div class="attachments-list" style="margin-bottom: 20px; padding: 15px; border: 1px solid #e2e8f0; border-radius: 4px; background-color: #f8fafc;">
+        <h3 style="margin-top: 0; margin-bottom: 10px; font-size: 1rem; color: #4a5568; display: flex; align-items: center; gap: 8px;">
+            <svg style="width: 16px; height: 16px;" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13"></path>
+            </svg>
+            Attachments
+        </h3>
+        <ul style="list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 8px;">
+            {% for att in attachments %}
+            {% if !att.is_inline %}
+            <li style="display: flex; align-items: center; gap: 10px;">
+                <a href="/dashboard/email/{{ id }}/attachment/{{ att.id }}" style="color: #3182ce; text-decoration: none; font-weight: 500;">
+                    {% match att.filename %}
+                        {% when Some with (name) %} {{ name }}
+                        {% when None %} Unknown File
+                    {% endmatch %}
+                </a>
+                <span style="color: #718096; font-size: 0.85rem;">({{ att.size_bytes / 1024 }} KB)</span>
+            </li>
+            {% endif %}
+            {% endfor %}
+        </ul>
+    </div>
+    {% endif %}
+
     <iframe id="email-iframe" class="email-body-iframe" sandbox=""
-        srcdoc="&lt;meta id='csp-meta' http-equiv='Content-Security-Policy' content='default-src &amp;apos;none&amp;apos;; style-src &amp;apos;unsafe-inline&amp;apos;; img-src &amp;apos;none&amp;apos;; font-src *;'&gt;{{ body }}">
+        srcdoc="&lt;meta id='csp-meta' http-equiv='Content-Security-Policy' content='default-src &amp;apos;none&amp;apos;; style-src &amp;apos;unsafe-inline&amp;apos;; img-src &amp;apos;self&amp;apos;; font-src *;'&gt;{{ body }}">
     </iframe>
 
     <script>
