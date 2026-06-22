@@ -2,8 +2,8 @@ use time::OffsetDateTime;
 use uuid::Uuid;
 
 use crate::db::DbPool;
-use crate::web::ReceivedEmail;
 use crate::inbound::parser::AttachmentMetadata;
+use crate::web::ReceivedEmail;
 
 #[derive(sqlx::FromRow, serde::Serialize, Debug, Clone)]
 pub struct AttachmentRow {

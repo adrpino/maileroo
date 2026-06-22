@@ -11,14 +11,17 @@ pub struct EmailMetadata {
 pub struct AttachmentMetadata {
     pub filename: Option<String>,
     pub content_type: Option<String>,
-    pub size_bytes: i64,          // decoded byte length
+    pub size_bytes: i64, // decoded byte length
     pub part_index: i32,
     pub is_inline: bool,
-    pub content_id: Option<String>,  // Content-ID without the <> wrapper
+    pub content_id: Option<String>, // Content-ID without the <> wrapper
 }
 
 /// Extracts metadata and attachment metadata from the email body for threading, display, and storage.
-pub fn extract_full_metadata(body: &[u8], envelope_sender: &str) -> (EmailMetadata, Vec<AttachmentMetadata>) {
+pub fn extract_full_metadata(
+    body: &[u8],
+    envelope_sender: &str,
+) -> (EmailMetadata, Vec<AttachmentMetadata>) {
     let message = MessageParser::default().parse(body);
 
     let subject = message
@@ -69,14 +72,17 @@ pub fn extract_full_metadata(body: &[u8], envelope_sender: &str) -> (EmailMetada
             let is_inline = matches!(part.body, PartType::InlineBinary(_))
                 || part.content_disposition().is_some_and(|d| d.is_inline())
                 || part.content_id().is_some();
-            
+
             let content_id = part.content_id().map(|id| {
                 let s = id.trim();
-                s.strip_prefix('<').and_then(|s| s.strip_suffix('>')).unwrap_or(s).to_string()
+                s.strip_prefix('<')
+                    .and_then(|s| s.strip_suffix('>'))
+                    .unwrap_or(s)
+                    .to_string()
             });
 
             let size_bytes = part.contents().len() as i64;
-            
+
             attachments.push(AttachmentMetadata {
                 filename: part.attachment_name().map(|s| s.to_string()),
                 content_type: part.content_type().map(|c| {

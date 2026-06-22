@@ -605,7 +605,7 @@ async fn test_attachment_deletion_and_security() {
 
         let response = app_router.clone().oneshot(req).await.unwrap();
         assert_eq!(response.status(), axum::http::StatusCode::OK);
-        
+
         let headers = response.headers();
         assert_eq!(headers.get("Content-Disposition").unwrap().to_str().unwrap(), "attachment; filename=\"secret.txt\"");
         assert_eq!(headers.get("X-Content-Type-Options").unwrap().to_str().unwrap(), "nosniff");
@@ -685,7 +685,7 @@ async fn test_attachment_part_index_resolution() {
 
         let db_attachments = maileroo::db::attachments::get_attachments_for_email(&db, email_id).await.unwrap();
         assert_eq!(db_attachments.len(), 2);
-        
+
         let att1 = db_attachments.iter().find(|a| a.filename.as_deref() == Some("first.txt")).unwrap();
         let att2 = db_attachments.iter().find(|a| a.filename.as_deref() == Some("second.txt")).unwrap();
 
@@ -791,7 +791,7 @@ async fn test_inline_image_e2e_dashboard_render() {
 
         let response = app_router.clone().oneshot(req).await.unwrap();
         assert_eq!(response.status(), axum::http::StatusCode::OK);
-        
+
         let html_bytes = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
         let html_str = String::from_utf8_lossy(&html_bytes);
         // Verify HTML body cid: rewrite (Askama escapes " as &#34;)

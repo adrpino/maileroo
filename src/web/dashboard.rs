@@ -10,10 +10,10 @@ use serde::Deserialize;
 use std::sync::Arc;
 use uuid::Uuid;
 
+use crate::db::attachments::{get_attachment_by_id, get_attachments_for_email};
 use crate::db::{
     delete_email_by_id, get_email_by_id, get_email_by_user_id, get_email_count_by_user_id,
 };
-use crate::db::attachments::{get_attachment_by_id, get_attachments_for_email};
 use crate::web::handlers::ModalTemplate;
 use crate::web::i18n::{Locale, Messages};
 use crate::web::{AppState, AuthenticatedUser, ThreadMessage};
@@ -503,12 +503,16 @@ pub async fn download_attachment_handler(
     // 4. Parse the email and get the attachment content
     let message = match MessageParser::default().parse(&bytes) {
         Some(m) => m,
-        None => return (StatusCode::INTERNAL_SERVER_ERROR, "Failed to parse email").into_response(),
+        None => {
+            return (StatusCode::INTERNAL_SERVER_ERROR, "Failed to parse email").into_response();
+        }
     };
 
     let part = match message.attachments().nth(attachment.part_index as usize) {
         Some(p) => p,
-        None => return (StatusCode::NOT_FOUND, "Attachment part not found in file").into_response(),
+        None => {
+            return (StatusCode::NOT_FOUND, "Attachment part not found in file").into_response();
+        }
     };
 
     let data = part.contents().to_vec();
@@ -516,9 +520,12 @@ pub async fn download_attachment_handler(
     // 5. Send with safe headers
     let raw = attachment.filename.as_deref().unwrap_or("attachment");
     let ascii = crate::outbound::mime::sanitize_header(raw).replace('"', "");
-    
+
     match Response::builder()
-        .header(header::CONTENT_DISPOSITION, format!("attachment; filename=\"{}\"", ascii))
+        .header(
+            header::CONTENT_DISPOSITION,
+            format!("attachment; filename=\"{}\"", ascii),
+        )
         .header(header::CONTENT_TYPE, "application/octet-stream")
         .header(header::X_CONTENT_TYPE_OPTIONS, "nosniff")
         .body(Body::from(data))
@@ -546,7 +553,10 @@ pub async fn inline_image_handler(
         Err(_) => return (StatusCode::INTERNAL_SERVER_ERROR, "DB Error").into_response(),
     };
 
-    let attachment = match attachments.into_iter().find(|a| a.content_id.as_deref() == Some(&content_id) && a.is_inline) {
+    let attachment = match attachments
+        .into_iter()
+        .find(|a| a.content_id.as_deref() == Some(&content_id) && a.is_inline)
+    {
         Some(a) => a,
         None => return (StatusCode::NOT_FOUND, "Inline image not found").into_response(),
     };
@@ -564,23 +574,33 @@ pub async fn inline_image_handler(
 
     let message = match MessageParser::default().parse(&bytes) {
         Some(m) => m,
-        None => return (StatusCode::INTERNAL_SERVER_ERROR, "Failed to parse email").into_response(),
+        None => {
+            return (StatusCode::INTERNAL_SERVER_ERROR, "Failed to parse email").into_response();
+        }
     };
 
     let part = match message.attachments().nth(attachment.part_index as usize) {
         Some(p) => p,
-        None => return (StatusCode::NOT_FOUND, "Attachment part not found in file").into_response(),
+        None => {
+            return (StatusCode::NOT_FOUND, "Attachment part not found in file").into_response();
+        }
     };
 
     let data = part.contents().to_vec();
 
     // Serve with original content type (must be image)
     let content_type = crate::outbound::mime::sanitize_header(
-        &attachment.content_type.unwrap_or_else(|| "application/octet-stream".to_string())
+        &attachment
+            .content_type
+            .unwrap_or_else(|| "application/octet-stream".to_string()),
     );
     if !content_type.starts_with("image/") {
         tracing::error!("Rejected inline image. Content type: '{}'", content_type);
-        return (StatusCode::BAD_REQUEST, format!("Not an image: {}", content_type)).into_response();
+        return (
+            StatusCode::BAD_REQUEST,
+            format!("Not an image: {}", content_type),
+        )
+            .into_response();
     }
 
     match Response::builder()

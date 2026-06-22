@@ -28,8 +28,8 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use uuid::Uuid;
 
-use crate::dns::DnsScanner;
 use crate::db::attachments::get_attachments_for_email;
+use crate::dns::DnsScanner;
 use axum_server::tls_rustls::RustlsConfig;
 
 use tower_http::trace::TraceLayer;
@@ -757,8 +757,6 @@ async fn get_email(
         }
     }
 }
-
-
 
 async fn fetch_thread_messages(state: &AppState, email_id: Uuid) -> Vec<ThreadMessage> {
     // 1. Fetch outbound replies

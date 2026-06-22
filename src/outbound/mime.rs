@@ -104,7 +104,10 @@ pub fn build_mime(email: &MimeEmail) -> String {
 
     let mixed_boundary = format!("=_Mixed_{}", Uuid::new_v4().to_string().replace("-", ""));
     let related_boundary = format!("=_Related_{}", Uuid::new_v4().to_string().replace("-", ""));
-    let alt_boundary = format!("=_Alternative_{}", Uuid::new_v4().to_string().replace("-", ""));
+    let alt_boundary = format!(
+        "=_Alternative_{}",
+        Uuid::new_v4().to_string().replace("-", "")
+    );
 
     let write_alt_part = |mime: &mut String| {
         if email.html_body.is_some() {
@@ -147,10 +150,16 @@ pub fn build_mime(email: &MimeEmail) -> String {
         let filename = a.filename.as_deref().unwrap_or("attachment").to_string();
         let filename = sanitize_header(&filename);
         let disposition = if a.is_inline { "inline" } else { "attachment" };
-        
-        mime.push_str(&format!("Content-Type: {}; name=\"{}\"\r\n", content_type, filename));
+
+        mime.push_str(&format!(
+            "Content-Type: {}; name=\"{}\"\r\n",
+            content_type, filename
+        ));
         mime.push_str("Content-Transfer-Encoding: base64\r\n");
-        mime.push_str(&format!("Content-Disposition: {}; filename=\"{}\"\r\n", disposition, filename));
+        mime.push_str(&format!(
+            "Content-Disposition: {}; filename=\"{}\"\r\n",
+            disposition, filename
+        ));
         if let Some(ref cid) = a.content_id {
             mime.push_str(&format!("Content-ID: <{}>\r\n", sanitize_header(cid)));
         }
@@ -169,9 +178,9 @@ pub fn build_mime(email: &MimeEmail) -> String {
             "Content-Type: multipart/mixed; boundary=\"{}\"\r\n\r\n",
             mixed_boundary
         ));
-        
+
         mime.push_str(&format!("--{}\r\n", mixed_boundary));
-        
+
         if has_inline_attachments {
             mime.push_str(&format!(
                 "Content-Type: multipart/related; boundary=\"{}\"\r\n\r\n",
@@ -179,7 +188,7 @@ pub fn build_mime(email: &MimeEmail) -> String {
             ));
             mime.push_str(&format!("--{}\r\n", related_boundary));
             write_alt_part(&mut mime);
-            
+
             for a in email.attachments.iter().filter(|a| a.is_inline) {
                 mime.push_str(&format!("--{}\r\n", related_boundary));
                 write_attachment(&mut mime, a);
@@ -201,7 +210,7 @@ pub fn build_mime(email: &MimeEmail) -> String {
         ));
         mime.push_str(&format!("--{}\r\n", related_boundary));
         write_alt_part(&mut mime);
-        
+
         for a in email.attachments.iter().filter(|a| a.is_inline) {
             mime.push_str(&format!("--{}\r\n", related_boundary));
             write_attachment(&mut mime, a);
@@ -239,15 +248,21 @@ pub fn rewrite_body_for_forward(
             let is_inline = matches!(part.body, mail_parser::PartType::InlineBinary(_))
                 || part.content_disposition().is_some_and(|d| d.is_inline())
                 || part.content_id().is_some();
-            
+
             let content_id = part.content_id().map(|id| {
                 let s = id.trim();
-                s.strip_prefix('<').and_then(|s| s.strip_suffix('>')).unwrap_or(s).to_string()
+                s.strip_prefix('<')
+                    .and_then(|s| s.strip_suffix('>'))
+                    .unwrap_or(s)
+                    .to_string()
             });
 
             attachments.push(Attachment {
                 filename: part.attachment_name().map(|s| s.to_string()),
-                content_type: part.content_type().map(|c| c.ctype().to_string()).unwrap_or_else(|| "application/octet-stream".to_string()),
+                content_type: part
+                    .content_type()
+                    .map(|c| c.ctype().to_string())
+                    .unwrap_or_else(|| "application/octet-stream".to_string()),
                 data: part.contents().to_vec(),
                 is_inline,
                 content_id,
@@ -290,15 +305,21 @@ pub fn prepare_reply_for_relay(body: &[u8], alias_address: &str, original_sender
             let is_inline = matches!(part.body, mail_parser::PartType::InlineBinary(_))
                 || part.content_disposition().is_some_and(|d| d.is_inline())
                 || part.content_id().is_some();
-            
+
             let content_id = part.content_id().map(|id| {
                 let s = id.trim();
-                s.strip_prefix('<').and_then(|s| s.strip_suffix('>')).unwrap_or(s).to_string()
+                s.strip_prefix('<')
+                    .and_then(|s| s.strip_suffix('>'))
+                    .unwrap_or(s)
+                    .to_string()
             });
 
             attachments.push(Attachment {
                 filename: part.attachment_name().map(|s| s.to_string()),
-                content_type: part.content_type().map(|c| c.ctype().to_string()).unwrap_or_else(|| "application/octet-stream".to_string()),
+                content_type: part
+                    .content_type()
+                    .map(|c| c.ctype().to_string())
+                    .unwrap_or_else(|| "application/octet-stream".to_string()),
                 data: part.contents().to_vec(),
                 is_inline,
                 content_id,
@@ -419,8 +440,11 @@ mod tests {
 
     #[test]
     fn test_relay_attachment_roundtrip() {
-        let original_data: Vec<u8> = vec![0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52]; // fake PNG
-        
+        let original_data: Vec<u8> = vec![
+            0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48,
+            0x44, 0x52,
+        ]; // fake PNG
+
         let original_email = MimeEmail {
             from: "alice@example.com".to_string(),
             to: "bob@example.com".to_string(),
@@ -430,15 +454,13 @@ mod tests {
             message_id: None,
             in_reply_to: None,
             references: None,
-            attachments: vec![
-                Attachment {
-                    filename: Some("image.png".to_string()),
-                    content_type: "image/png".to_string(),
-                    data: original_data.clone(),
-                    is_inline: false,
-                    content_id: None,
-                }
-            ]
+            attachments: vec![Attachment {
+                filename: Some("image.png".to_string()),
+                content_type: "image/png".to_string(),
+                data: original_data.clone(),
+                is_inline: false,
+                content_id: None,
+            }],
         };
 
         let raw_email = build_mime(&original_email);
@@ -448,12 +470,14 @@ mod tests {
             raw_email.as_bytes(),
             "alice@example.com",
             "reply-token@domain.com",
-            "dest@gmail.com"
+            "dest@gmail.com",
         );
 
         // Parse forwarded
-        let parsed = mail_parser::MessageParser::default().parse(forwarded.as_bytes()).unwrap();
-        
+        let parsed = mail_parser::MessageParser::default()
+            .parse(forwarded.as_bytes())
+            .unwrap();
+
         // Assert
         let atts: Vec<_> = parsed.attachments().collect();
         assert_eq!(atts.len(), 1);
@@ -465,7 +489,7 @@ mod tests {
     fn test_relay_inline_image_and_pdf() {
         let image_data: Vec<u8> = vec![0x89, 0x50, 0x4E, 0x47]; // fake PNG
         let pdf_data: Vec<u8> = vec![0x25, 0x50, 0x44, 0x46]; // fake PDF
-        
+
         let original_email = MimeEmail {
             from: "alice@example.com".to_string(),
             to: "bob@example.com".to_string(),
@@ -489,8 +513,8 @@ mod tests {
                     data: pdf_data.clone(),
                     is_inline: false,
                     content_id: None,
-                }
-            ]
+                },
+            ],
         };
 
         let raw_email = build_mime(&original_email);
@@ -500,22 +524,34 @@ mod tests {
             raw_email.as_bytes(),
             "alice@example.com",
             "reply-token@domain.com",
-            "dest@gmail.com"
+            "dest@gmail.com",
         );
 
         // Parse forwarded
-        let parsed = mail_parser::MessageParser::default().parse(forwarded.as_bytes()).unwrap();
-        
+        let parsed = mail_parser::MessageParser::default()
+            .parse(forwarded.as_bytes())
+            .unwrap();
+
         // Assert
         let atts: Vec<_> = parsed.attachments().collect();
         assert_eq!(atts.len(), 2);
 
-        let inline_img = atts.iter().find(|a| a.content_id() == Some("logo-img")).unwrap();
+        let inline_img = atts
+            .iter()
+            .find(|a| a.content_id() == Some("logo-img"))
+            .unwrap();
         assert_eq!(inline_img.contents(), image_data.as_slice());
         use mail_parser::MimeHeaders;
-        assert!(inline_img.content_disposition().is_some_and(|d| d.is_inline()));
+        assert!(
+            inline_img
+                .content_disposition()
+                .is_some_and(|d| d.is_inline())
+        );
 
-        let pdf = atts.iter().find(|a| a.attachment_name() == Some("report.pdf")).unwrap();
+        let pdf = atts
+            .iter()
+            .find(|a| a.attachment_name() == Some("report.pdf"))
+            .unwrap();
         assert_eq!(pdf.contents(), pdf_data.as_slice());
         assert!(!pdf.content_disposition().is_some_and(|d| d.is_inline()));
     }

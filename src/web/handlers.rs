@@ -1,8 +1,8 @@
+use crate::db::attachments::AttachmentRow;
 use crate::db::{
     Alias, DbPool, Domain, delete_alias_by_id, get_aliases_by_user_id, get_domains,
     get_user_by_email, insert_user, update_last_login,
 };
-use crate::db::attachments::AttachmentRow;
 use crate::disposable_domains::is_disposable;
 use crate::web::ThreadMessage;
 use crate::web::auth::{hash_password, verify_password};

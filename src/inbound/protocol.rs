@@ -1,9 +1,7 @@
-use crate::db::{
-    ReplyMappingLookup, get_or_create_reply_mapping, get_reply_mapping_by_token,
-};
+use crate::db::{ReplyMappingLookup, get_or_create_reply_mapping, get_reply_mapping_by_token};
 use crate::fs::write_file_sync_with_permissions;
 use crate::inbound::acceptor::HotReloadAcceptor;
-use crate::inbound::parser::{extract_full_metadata, AttachmentMetadata, EmailMetadata};
+use crate::inbound::parser::{AttachmentMetadata, EmailMetadata, extract_full_metadata};
 use crate::outbound::OutboundService;
 use crate::outbound::mime::prepare_reply_for_relay;
 use pin_project_lite::pin_project;
@@ -91,8 +89,6 @@ enum SmtpState {
     ReadingBody,
 }
 
-
-
 pub struct SmartBodyBuffer {
     state: BodyBufferState,
     max_memory: usize,
@@ -171,7 +167,10 @@ impl SmartBodyBuffer {
         self.bytes_written
     }
 
-    pub fn extract_full_metadata(&self, envelope_sender: &str) -> Result<(EmailMetadata, Vec<AttachmentMetadata>), std::io::Error> {
+    pub fn extract_full_metadata(
+        &self,
+        envelope_sender: &str,
+    ) -> Result<(EmailMetadata, Vec<AttachmentMetadata>), std::io::Error> {
         match &self.state {
             BodyBufferState::Memory(vec) => Ok(extract_full_metadata(vec, envelope_sender)),
             BodyBufferState::Disk { temp_file, .. } => {
@@ -267,7 +266,6 @@ impl SmtpSession {
                 .to_string()
         })
     }
-
 
     pub fn new(
         socket: TcpStream,
@@ -565,7 +563,8 @@ impl SmtpSession {
 
             // 1. Extract metadata and determine correct display sender
             let envelope_sender = self.sender.as_deref().unwrap_or_default();
-            let (metadata, attachments) = self.body_buffer.extract_full_metadata(envelope_sender)?;
+            let (metadata, attachments) =
+                self.body_buffer.extract_full_metadata(envelope_sender)?;
 
             let body_key = uuid::Uuid::new_v4();
             let path = self.storage_dir.join(format!("{}.eml", body_key));

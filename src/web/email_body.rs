@@ -22,9 +22,13 @@ pub fn sanitize_email_body(raw_body: &str, email_id: Uuid) -> String {
 }
 
 pub fn rewrite_cid_references(html: &str, email_id: Uuid) -> String {
-    let cid_re = CID_REGEX.get_or_init(|| regex::Regex::new(r#"src=["']cid:([^"']+)["']"#).unwrap());
+    let cid_re =
+        CID_REGEX.get_or_init(|| regex::Regex::new(r#"src=["']cid:([^"']+)["']"#).unwrap());
     cid_re
-        .replace_all(html, format!(r#"src="/dashboard/email/{}/inline/$1""#, email_id))
+        .replace_all(
+            html,
+            format!(r#"src="/dashboard/email/{}/inline/$1""#, email_id),
+        )
         .to_string()
 }
 
@@ -36,9 +40,9 @@ mod tests {
     fn test_rewrite_cid_references() {
         let email_id = Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap();
         let html = r#"<img src="cid:logo.png" alt="logo"><img src='cid:header_img' />"#;
-        
+
         let rewritten = rewrite_cid_references(html, email_id);
-        
+
         assert_eq!(
             rewritten,
             r#"<img src="/dashboard/email/550e8400-e29b-41d4-a716-446655440000/inline/logo.png" alt="logo"><img src="/dashboard/email/550e8400-e29b-41d4-a716-446655440000/inline/header_img" />"#
