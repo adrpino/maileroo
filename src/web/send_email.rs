@@ -725,4 +725,68 @@ mod tests {
         assert!(rendered.contains("<select"));
         assert!(!rendered.contains("<option value="));
     }
+
+    // Regression test for the outbound attachments bug: the autosave form declares
+    // `hx-params="not attachments"` to exclude file inputs from draft autosave.
+    // HTMX inherits `hx-params` from ancestor elements, so the Send button must
+    // override this with `hx-params="*"` or its multipart POST to /emails/send
+    // will silently strip the attachments field, producing an attachment-less .eml
+    // and zero attachment rows in the DB despite a user selecting files.
+    #[test]
+    fn test_compose_modal_send_button_includes_attachments() {
+        let alias = crate::db::Alias {
+            id: Uuid::new_v4(),
+            user_id: Uuid::new_v4(),
+            domain_id: Uuid::new_v4(),
+            subdomain: "contact".to_string(),
+            destination_email: "dest@example.com".to_string(),
+            auto_forward: true,
+            active: true,
+            created_at: OffsetDateTime::now_utc(),
+            domain_name: "maileroo.test".to_string(),
+        };
+
+        let template = ComposeModalTemplate {
+            locale: Locale::En,
+            aliases: vec![alias],
+            draft_id: None,
+            to_email: String::new(),
+            subject: String::new(),
+            body_text: String::new(),
+            selected_alias_id: None,
+        };
+
+        let rendered = template
+            .render()
+            .expect("Failed to render compose template");
+
+        // The Send button must override inherited `hx-params="not attachments"`
+        // so files are included in the multipart POST to /emails/send.
+        let send_button_start = rendered
+            .find("btn-send\"")
+            .expect("Send button must be present");
+        let send_button = &rendered[send_button_start..];
+        let button_end = send_button
+            .find('>')
+            .expect("Send button tag must be closed");
+        let button_tag = &send_button[..button_end];
+
+        assert!(
+            button_tag.contains("hx-post=\"/api/v1/emails/send\""),
+            "Send button must POST to /emails/send: {button_tag}"
+        );
+        assert!(
+            button_tag.contains("hx-encoding=\"multipart/form-data\""),
+            "Send button must use multipart encoding: {button_tag}"
+        );
+        assert!(
+            button_tag.contains("hx-params=\"*\""),
+            "Send button must set hx-params=\"*\" to override the autosave form's \
+             `hx-params=\"not attachments\"` (HTMX inherits hx-params from ancestors): {button_tag}"
+        );
+        assert!(
+            !button_tag.contains("hx-params=\"not attachments\""),
+            "Send button must not inherit the autosave `not attachments` exclusion: {button_tag}"
+        );
+    }
 }
