@@ -1,17 +1,25 @@
-use crate::db::get_alias_by_id_and_user;
+use crate::db::sent_emails::{
+    get_sent_email_by_id_and_user, mark_sent_email_failed, mark_sent_email_success, upsert_draft,
+};
+use crate::db::{DbPool, get_alias_by_id_and_user};
 use crate::fs::write_file_async_with_permissions;
-use crate::outbound::mime::{MimeEmail, build_mime};
+use crate::outbound::mime::{Attachment, MimeEmail, build_mime, sanitize_header};
 use crate::web::i18n::{Locale, Messages};
 use crate::web::{AppState, FirsthandSenderUser};
 use askama::Template;
 use axum::{
-    extract::{Form, Query, State},
+    extract::{Form, Multipart, Query, State},
     http::StatusCode,
     response::IntoResponse,
 };
 use serde::Deserialize;
 use std::sync::Arc;
 use uuid::Uuid;
+
+pub const MAX_ATTACHMENTS: usize = 10;
+pub const MAX_ATTACHMENT_BYTES: usize = 10 * 1024 * 1024; // 10 MB
+pub const MAX_TOTAL_ATTACHMENT_BYTES: usize = 25 * 1024 * 1024; // 25 MB
+pub const MAX_UPLOAD_REQUEST_BYTES: usize = 30 * 1024 * 1024; // 30 MB
 
 #[derive(Template)]
 #[template(path = "compose_modal.html")]
@@ -63,9 +71,7 @@ pub async fn compose_modal_handler(
     let mut selected_alias_id = None;
 
     if let Some(id) = query.draft_id {
-        if let Ok(Some(draft)) =
-            crate::db::sent_emails::get_sent_email_by_id_and_user(&state.db, id, user.0.user_id)
-                .await
+        if let Ok(Some(draft)) = get_sent_email_by_id_and_user(&state.db, id, user.0.user_id).await
         {
             draft_id = Some(draft.id);
             to_email = draft.to_address;
@@ -125,12 +131,135 @@ pub async fn submit_email_handler(
     locale: Locale,
     user: FirsthandSenderUser,
     State(state): State<Arc<AppState>>,
-    Form(payload): Form<SendEmailRequest>,
+    mut multipart: Multipart,
 ) -> impl IntoResponse {
     let auth_user = user.0;
 
-    // 1. Basic validation
-    let to_email = payload.to_email.trim();
+    let mut draft_id: Option<Uuid> = None;
+    let mut from_alias_id: Option<Uuid> = None;
+    let mut to_email_str = String::new();
+    let mut subject_str = String::new();
+    let mut body_text_str = String::new();
+    let mut attachments: Vec<Attachment> = Vec::new();
+    let mut total_attachment_bytes = 0usize;
+
+    while let Ok(Some(mut field)) = multipart.next_field().await {
+        let name = match field.name() {
+            Some(name) => name.to_string(),
+            None => continue,
+        };
+
+        if name == "attachments" {
+            let filename = field.file_name().map(sanitize_header);
+            let content_type = field.content_type().map(sanitize_header);
+
+            let mut data = Vec::new();
+            while let Ok(Some(chunk)) = field.chunk().await {
+                if data.len() + chunk.len() > MAX_ATTACHMENT_BYTES {
+                    return ToastTemplate {
+                        message: format!(
+                            "Attachment exceeds maximum limit of {} MB.",
+                            MAX_ATTACHMENT_BYTES / 1024 / 1024
+                        ),
+                        success: false,
+                    }
+                    .into_response();
+                }
+                data.extend_from_slice(&chunk);
+            }
+
+            if data.is_empty() {
+                continue;
+            }
+
+            if attachments.len() >= MAX_ATTACHMENTS {
+                return ToastTemplate {
+                    message: format!("Too many attachments. Maximum is {}.", MAX_ATTACHMENTS),
+                    success: false,
+                }
+                .into_response();
+            }
+
+            total_attachment_bytes += data.len();
+            if total_attachment_bytes > MAX_TOTAL_ATTACHMENT_BYTES {
+                return ToastTemplate {
+                    message: format!(
+                        "Total attachments size exceeds limit of {} MB.",
+                        MAX_TOTAL_ATTACHMENT_BYTES / 1024 / 1024
+                    ),
+                    success: false,
+                }
+                .into_response();
+            }
+
+            let resolved_content_type = match content_type {
+                Some(ref ct) if !ct.trim().is_empty() => ct.clone(),
+                _ => {
+                    if let Some(ref fname) = filename {
+                        mime_guess::from_path(fname)
+                            .first_raw()
+                            .unwrap_or("application/octet-stream")
+                            .to_string()
+                    } else {
+                        "application/octet-stream".to_string()
+                    }
+                }
+            };
+
+            let final_filename = match filename {
+                Some(f) => {
+                    let cleaned = f.replace(['/', '\\'], "").trim().to_string();
+                    if cleaned.is_empty() {
+                        Some("attachment".to_string())
+                    } else {
+                        Some(cleaned)
+                    }
+                }
+                None => Some("attachment".to_string()),
+            };
+
+            attachments.push(Attachment {
+                filename: final_filename,
+                content_type: resolved_content_type,
+                data,
+                is_inline: false,
+                content_id: None,
+            });
+        } else {
+            let value = match field.text().await {
+                Ok(val) => val,
+                Err(e) => {
+                    tracing::error!("Failed to read field {}: {}", name, e);
+                    continue;
+                }
+            };
+
+            match name.as_str() {
+                "draft_id" => {
+                    if let Ok(id) = Uuid::parse_str(value.trim()) {
+                        draft_id = Some(id);
+                    }
+                }
+                "from_alias_id" => {
+                    if let Ok(id) = Uuid::parse_str(value.trim()) {
+                        from_alias_id = Some(id);
+                    }
+                }
+                "to_email" => {
+                    to_email_str = value;
+                }
+                "subject" => {
+                    subject_str = value;
+                }
+                "body_text" => {
+                    body_text_str = value;
+                }
+                _ => {}
+            }
+        }
+    }
+
+    let to_email = to_email_str.trim();
     if to_email.is_empty() || !to_email.contains('@') {
         return ToastTemplate {
             message: locale.toast_invalid_email().to_string(),
@@ -139,7 +268,7 @@ pub async fn submit_email_handler(
         .into_response();
     }
 
-    if payload.subject.trim().is_empty() {
+    if subject_str.trim().is_empty() {
         return ToastTemplate {
             message: locale.toast_empty_subject().to_string(),
             success: false,
@@ -147,26 +276,36 @@ pub async fn submit_email_handler(
         .into_response();
     }
 
+    let from_alias_id = match from_alias_id {
+        Some(id) => id,
+        None => {
+            return ToastTemplate {
+                message: locale.toast_alias_unauthorized().to_string(),
+                success: false,
+            }
+            .into_response();
+        }
+    };
+
     // 2. Authorize alias ownership
-    let alias =
-        match get_alias_by_id_and_user(&state.db, payload.from_alias_id, auth_user.user_id).await {
-            Ok(Some(a)) => a,
-            Ok(None) => {
-                return ToastTemplate {
-                    message: locale.toast_alias_unauthorized().to_string(),
-                    success: false,
-                }
-                .into_response();
+    let alias = match get_alias_by_id_and_user(&state.db, from_alias_id, auth_user.user_id).await {
+        Ok(Some(a)) => a,
+        Ok(None) => {
+            return ToastTemplate {
+                message: locale.toast_alias_unauthorized().to_string(),
+                success: false,
             }
-            Err(e) => {
-                tracing::error!("Database error fetching alias: {}", e);
-                return ToastTemplate {
-                    message: "Internal server error verifying alias.".to_string(),
-                    success: false,
-                }
-                .into_response();
+            .into_response();
+        }
+        Err(e) => {
+            tracing::error!("Database error fetching alias: {}", e);
+            return ToastTemplate {
+                message: "Internal server error verifying alias.".to_string(),
+                success: false,
             }
-        };
+            .into_response();
+        }
+    };
 
     let from_address = format!("{}@{}", alias.subdomain, alias.domain_name);
 
@@ -174,14 +313,9 @@ pub async fn submit_email_handler(
     // This allows us to cleanly delete the old raw draft file from disk once sent,
     // preventing orphaned plain-text draft files from leaking on the host filesystem.
     let mut old_draft_body_key = None;
-    if let Some(draft_id) = payload.draft_id {
-        if let Ok(Some(draft)) = crate::db::sent_emails::get_sent_email_by_id_and_user(
-            &state.db,
-            draft_id,
-            auth_user.user_id,
-        )
-        .await
-        {
+    if let Some(d_id) = draft_id {
+        let draft_res = get_sent_email_by_id_and_user(&state.db, d_id, auth_user.user_id).await;
+        if let Ok(Some(draft)) = draft_res {
             old_draft_body_key = Some(draft.body_key);
         }
     }
@@ -190,17 +324,29 @@ pub async fn submit_email_handler(
     let domain = from_address.split('@').nth(1).unwrap_or("localhost");
     let message_id = crate::outbound::mime::generate_message_id(domain);
 
+    // Extract attachment metadata before they are moved/consumed by building MimeEmail
+    let attachment_metadatas: Vec<(Option<String>, String, i64)> = attachments
+        .iter()
+        .map(|a| {
+            (
+                a.filename.clone(),
+                a.content_type.clone(),
+                a.data.len() as i64,
+            )
+        })
+        .collect();
+
     // 4. Construct the MIME payload using our modular builder
     let mime_email = MimeEmail {
         from: from_address.clone(),
         to: to_email.to_string(),
-        subject: payload.subject.clone(),
-        text_body: payload.body_text.clone(),
+        subject: subject_str.clone(),
+        text_body: body_text_str.clone(),
         html_body: None, // Optional: Add WYSIWYG later in Phase 4
         message_id: Some(message_id.clone()),
         in_reply_to: None,
         references: None,
-        attachments: vec![],
+        attachments,
     };
 
     let raw_mime = build_mime(&mime_email);
@@ -231,6 +377,62 @@ pub async fn submit_email_handler(
         }
     };
 
+    // Helper function to record attachment metadata for sent emails
+    let record_sent_attachments =
+        |pool: DbPool, email_id: Uuid, metadatas: Vec<(Option<String>, String, i64)>| async move {
+            if metadatas.is_empty() {
+                return;
+            }
+
+            for (i, (fname, ctype, size)) in metadatas.iter().enumerate() {
+                let att_id = Uuid::new_v4();
+                if let Err(err) = crate::db::attachments::insert_attachment(
+                    &pool,
+                    att_id,
+                    email_id,
+                    fname.as_deref(),
+                    Some(ctype),
+                    *size,
+                    i as i32,
+                    false,
+                    None,
+                )
+                .await
+                {
+                    tracing::error!("Database error inserting sent attachment row: {}", err);
+                }
+            }
+
+            match &pool {
+                DbPool::Postgres(p) => {
+                    if let Err(err) =
+                        sqlx::query("UPDATE sent_emails SET has_attachments = TRUE WHERE id = $1")
+                            .bind(email_id)
+                            .execute(p)
+                            .await
+                    {
+                        tracing::error!(
+                            "Database error setting has_attachments on sent_emails: {}",
+                            err
+                        );
+                    }
+                }
+                DbPool::Sqlite(p) => {
+                    if let Err(err) =
+                        sqlx::query("UPDATE sent_emails SET has_attachments = TRUE WHERE id = ?")
+                            .bind(email_id)
+                            .execute(p)
+                            .await
+                    {
+                        tracing::error!(
+                            "Database error setting has_attachments on sent_emails: {}",
+                            err
+                        );
+                    }
+                }
+            }
+        };
+
     // 6. Send the email via the Outbound Service
     match state
         .outbound
@@ -239,31 +441,27 @@ pub async fn submit_email_handler(
     {
         Ok(_) => {
             // 7. Log the success to the database using the body_key
-            match crate::db::sent_emails::upsert_draft(
+            match upsert_draft(
                 &state.db,
-                payload.draft_id,
+                draft_id,
                 auth_user.user_id,
-                payload.from_alias_id,
+                from_alias_id,
                 to_email,
-                &payload.subject,
+                &subject_str,
                 body_key,
             )
             .await
             {
-                Ok(draft_id) => {
+                Ok(upserted_id) => {
                     // Clean up the old raw draft file from disk to prevent leakage
                     old_draft_cleanup(state.storage_dir.clone(), old_draft_body_key);
 
-                    if let Err(err) = crate::db::sent_emails::mark_sent_email_success(
-                        &state.db,
-                        draft_id,
-                        &message_id,
-                    )
-                    .await
+                    if let Err(err) =
+                        mark_sent_email_success(&state.db, upserted_id, &message_id).await
                     {
                         tracing::error!(
                             "Database error marking sent email success for {}: {}",
-                            draft_id,
+                            upserted_id,
                             err
                         );
                         return (
@@ -276,6 +474,10 @@ pub async fn submit_email_handler(
                         )
                             .into_response();
                     }
+
+                    // Record attachment metadata on success
+                    record_sent_attachments(state.db.clone(), upserted_id, attachment_metadatas)
+                        .await;
                 }
                 Err(e) => {
                     tracing::error!("Failed to upsert draft before marking sent: {}", e);
@@ -309,34 +511,34 @@ pub async fn submit_email_handler(
             tracing::error!("Failed to send firsthand email: {}", e);
 
             // Log the failure to the database
-            match crate::db::sent_emails::upsert_draft(
+            match upsert_draft(
                 &state.db,
-                payload.draft_id,
+                draft_id,
                 auth_user.user_id,
-                payload.from_alias_id,
+                from_alias_id,
                 to_email,
-                &payload.subject,
+                &subject_str,
                 body_key,
             )
             .await
             {
-                Ok(draft_id) => {
+                Ok(upserted_id) => {
                     // Clean up the old raw draft file from disk to prevent leakage
                     old_draft_cleanup(state.storage_dir.clone(), old_draft_body_key);
 
-                    if let Err(err) = crate::db::sent_emails::mark_sent_email_failed(
-                        &state.db,
-                        draft_id,
-                        &e.to_string(),
-                    )
-                    .await
+                    if let Err(err) =
+                        mark_sent_email_failed(&state.db, upserted_id, &e.to_string()).await
                     {
                         tracing::error!(
                             "Database error marking sent email failed for {}: {}",
-                            draft_id,
+                            upserted_id,
                             err
                         );
                     }
+
+                    // Record attachment metadata on failure
+                    record_sent_attachments(state.db.clone(), upserted_id, attachment_metadatas)
+                        .await;
                 }
                 Err(e) => tracing::error!("Failed to upsert draft before marking failed: {}", e),
             }
@@ -369,13 +571,7 @@ pub async fn save_draft_handler(
     let body_key = if let Some(draft_id) = payload.draft_id {
         // If a draft already exists, fetch its existing body_key to overwrite the same file
         // preventing orphaned files from piling up on disk.
-        match crate::db::sent_emails::get_sent_email_by_id_and_user(
-            &state.db,
-            draft_id,
-            auth_user.user_id,
-        )
-        .await
-        {
+        match get_sent_email_by_id_and_user(&state.db, draft_id, auth_user.user_id).await {
             Ok(Some(draft)) => draft.body_key,
             _ => Uuid::new_v4(), // Fallback if someone sends a bogus draft_id
         }
@@ -393,7 +589,7 @@ pub async fn save_draft_handler(
         return (StatusCode::INTERNAL_SERVER_ERROR, "Storage error").into_response();
     }
 
-    match crate::db::sent_emails::upsert_draft(
+    match upsert_draft(
         &state.db,
         payload.draft_id,
         auth_user.user_id,

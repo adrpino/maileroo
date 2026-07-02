@@ -215,7 +215,8 @@
               hx-trigger="input changed delay:2s, change changed delay:2s" 
               hx-target="#draft-status-container" 
               hx-swap="innerHTML"
-              hx-indicator="#draft-indicator">
+              hx-indicator="#draft-indicator"
+              hx-params="not attachments">
             
             <div class="maileroo-compose-body">
                 <div id="draft-id-container">
@@ -253,6 +254,16 @@
                     <label for="body_text" class="form-label">{{ locale.compose_body() }}</label>
                     <textarea id="body_text" name="body_text" class="compose-textarea" placeholder="Write your message here...">{{ body_text }}</textarea>
                 </div>
+
+                <div style="background-color: #fef3c7; border-left: 4px solid #f59e0b; color: #b45309; padding: 10px 14px; border-radius: 6px; font-size: 0.85rem; line-height: 1.4; display: flex; align-items: start; gap: 8px; margin-top: 15px;">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink: 0; margin-top: 2px;"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line></svg>
+                    <span>Files are not saved with drafts. They will be lost if you close this window or reload the draft — re-select them before sending.</span>
+                </div>
+
+                <div class="form-row">
+                    <label for="attachments" class="form-label">{{ locale.compose_attachments() }}</label>
+                    <input type="file" id="attachments" name="attachments" class="compose-input" multiple>
+                </div>
             </div>
 
             <div class="maileroo-compose-footer">
@@ -263,7 +274,7 @@
                 
                 <div style="display: flex; gap: 12px; align-items: center;">
                     <button type="button" class="btn-cancel" hx-on:click="document.getElementById('maileroo-modal').remove()">{{ locale.modal_cancel() }}</button>
-                    <button type="button" class="btn-send" hx-post="/api/v1/emails/send" hx-disabled-elt="this" hx-target="body" hx-swap="beforeend" hx-on::after-request="if(event.detail.successful) document.getElementById('maileroo-modal').remove()">
+                    <button type="button" class="btn-send" hx-post="/api/v1/emails/send" hx-encoding="multipart/form-data" hx-disabled-elt="this" hx-target="body" hx-swap="beforeend" hx-on::after-request="if(event.detail.successful) document.getElementById('maileroo-modal').remove()">
                         <span class="indicator-default" style="display: inline-flex; align-items: center; gap: 8px;">
                             <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg>
                             {{ locale.compose_send() }}

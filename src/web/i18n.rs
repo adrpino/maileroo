@@ -68,6 +68,7 @@ pub trait Messages {
     fn compose_to(&self) -> &'static str;
     fn compose_subject(&self) -> &'static str;
     fn compose_body(&self) -> &'static str;
+    fn compose_attachments(&self) -> &'static str;
     fn compose_send(&self) -> &'static str;
     fn compose_sending(&self) -> &'static str;
     fn logout_button(&self) -> &'static str;
@@ -381,6 +382,15 @@ impl Messages for Locale {
             Locale::Es => "Mensaje",
             Locale::Fr => "Message",
             Locale::Pt => "Mensagem",
+        }
+    }
+
+    fn compose_attachments(&self) -> &'static str {
+        match self {
+            Locale::En => "Attachments",
+            Locale::Es => "Adjuntos",
+            Locale::Fr => "Pièces jointes",
+            Locale::Pt => "Anexos",
         }
     }
 
