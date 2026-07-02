@@ -14,7 +14,7 @@ pub mod replies;
 pub mod send_email;
 
 use crate::db::DbPool;
-use axum::extract::{FromRequestParts, State};
+use axum::extract::{DefaultBodyLimit, FromRequestParts, State};
 use axum::{
     Json, Router,
     body::Body,
@@ -23,6 +23,7 @@ use axum::{
     response::{IntoResponse, Response},
     routing::{delete, get, post},
 };
+use send_email::MAX_UPLOAD_REQUEST_BYTES;
 use serde_json::{Value, json};
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -508,7 +509,11 @@ pub async fn create_app(state: AppState) -> Router {
                 .route("/emails", get(api::list_emails_handler))
                 .route("/emails/compose", get(send_email::compose_modal_handler))
                 .route("/emails/drafts", post(send_email::save_draft_handler))
-                .route("/emails/send", post(send_email::submit_email_handler))
+                .route(
+                    "/emails/send",
+                    post(send_email::submit_email_handler)
+                        .layer(DefaultBodyLimit::max(MAX_UPLOAD_REQUEST_BYTES)),
+                )
                 .route("/emails/{id}/reply", post(api::submit_reply_api))
                 .route("/aliases/{id}/toggle", post(api::toggle_alias_forward_api)),
         )
@@ -727,6 +732,10 @@ async fn get_email(
 
                     let body = email_body::sanitize_email_body(&raw_body, email_id);
 
+                    let attachments = get_attachments_for_email(&state.db, email_id)
+                        .await
+                        .unwrap_or_default();
+
                     EmailDetailTemplate {
                         id: email_id,
                         sender,
@@ -738,7 +747,7 @@ async fn get_email(
                         is_outbound: true,
                         locale,
                         replies: vec![],
-                        attachments: vec![],
+                        attachments,
                     }
                     .into_response()
                 }

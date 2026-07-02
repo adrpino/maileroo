@@ -10,7 +10,9 @@ use serde::Deserialize;
 use std::sync::Arc;
 use uuid::Uuid;
 
-use crate::db::attachments::{get_attachment_by_id, get_attachments_for_email};
+use crate::db::attachments::{
+    delete_attachments_for_email, get_attachment_by_id, get_attachments_for_email,
+};
 use crate::db::{
     delete_email_by_id, get_email_by_id, get_email_by_user_id, get_email_count_by_user_id,
 };
@@ -122,7 +124,7 @@ pub async fn dashboard_handler(
                 is_sent_folder: true,
                 is_viewed: true,
                 status: Some(email.status),
-                has_attachments: false,
+                has_attachments: email.has_attachments,
             })
             .collect();
 
@@ -244,6 +246,9 @@ async fn perform_smart_delete(
         };
 
         if deleted {
+            if let Err(err) = delete_attachments_for_email(&state.db, email_id).await {
+                tracing::error!("Failed to delete attachments for email {}: {}", email_id, err);
+            }
             let file_path = state.storage_dir.join(body_key.to_string());
             let eml_path = state.storage_dir.join(format!("{}.eml", body_key));
 
@@ -671,6 +676,7 @@ mod tests {
             updated_at: OffsetDateTime::now_utc(),
             sent_at: Some(OffsetDateTime::now_utc()),
             alias_address: "myalias@domain.com".to_string(),
+            has_attachments: false,
         };
 
         let display_email = DisplayEmail {

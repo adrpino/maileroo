@@ -555,4 +555,119 @@ mod tests {
         assert_eq!(pdf.contents(), pdf_data.as_slice());
         assert!(!pdf.content_disposition().is_some_and(|d| d.is_inline()));
     }
+
+    #[test]
+    fn test_multi_attachment_compose_build() {
+        let original_data1: Vec<u8> = vec![1, 2, 3, 4];
+        let original_data2: Vec<u8> = vec![5, 6, 7, 8];
+
+        let email = MimeEmail {
+            from: "alice@example.com".to_string(),
+            to: "bob@example.com".to_string(),
+            subject: "Two files".to_string(),
+            text_body: "Here they are.".to_string(),
+            html_body: None,
+            message_id: None,
+            in_reply_to: None,
+            references: None,
+            attachments: vec![
+                Attachment {
+                    filename: Some("file1.bin".to_string()),
+                    content_type: "application/octet-stream".to_string(),
+                    data: original_data1.clone(),
+                    is_inline: false,
+                    content_id: None,
+                },
+                Attachment {
+                    filename: Some("file2.bin".to_string()),
+                    content_type: "application/octet-stream".to_string(),
+                    data: original_data2.clone(),
+                    is_inline: false,
+                    content_id: None,
+                },
+            ],
+        };
+
+        let raw_email = build_mime(&email);
+        let parsed = mail_parser::MessageParser::default()
+            .parse(raw_email.as_bytes())
+            .unwrap();
+
+        let atts: Vec<_> = parsed.attachments().collect();
+        assert_eq!(atts.len(), 2);
+        assert_eq!(atts[0].attachment_name(), Some("file1.bin"));
+        assert_eq!(atts[0].contents(), original_data1.as_slice());
+        assert_eq!(atts[1].attachment_name(), Some("file2.bin"));
+        assert_eq!(atts[1].contents(), original_data2.as_slice());
+    }
+
+    #[test]
+    fn test_no_attachment_path_unchanged() {
+        let email = MimeEmail {
+            from: "alice@example.com".to_string(),
+            to: "bob@example.com".to_string(),
+            subject: "No files".to_string(),
+            text_body: "Just text.".to_string(),
+            html_body: None,
+            message_id: None,
+            in_reply_to: None,
+            references: None,
+            attachments: vec![],
+        };
+
+        let raw_email = build_mime(&email);
+        let parsed = mail_parser::MessageParser::default()
+            .parse(raw_email.as_bytes())
+            .unwrap();
+
+        assert_eq!(parsed.attachments().count(), 0);
+        assert!(raw_email.contains("Content-Type: text/plain"));
+    }
+
+    #[test]
+    fn test_parse_shape_parity() {
+        let original_data1: Vec<u8> = vec![9, 10];
+        let email = MimeEmail {
+            from: "alice@example.com".to_string(),
+            to: "bob@example.com".to_string(),
+            subject: "Parity test".to_string(),
+            text_body: "Text body".to_string(),
+            html_body: None,
+            message_id: None,
+            in_reply_to: None,
+            references: None,
+            attachments: vec![Attachment {
+                filename: Some("test.bin".to_string()),
+                content_type: "application/octet-stream".to_string(),
+                data: original_data1.clone(),
+                is_inline: false,
+                content_id: None,
+            }],
+        };
+
+        let raw_email = build_mime(&email);
+
+        // Build/insert-time parse:
+        let parsed_insert = mail_parser::MessageParser::default()
+            .parse(raw_email.as_bytes())
+            .unwrap();
+        let count_insert = parsed_insert.attachments().count();
+        let name_insert = parsed_insert
+            .attachments()
+            .next()
+            .and_then(|a| a.attachment_name().map(|s| s.to_string()));
+
+        // Download-time parse:
+        let parsed_download = mail_parser::MessageParser::default()
+            .parse(raw_email.as_bytes())
+            .unwrap();
+        let count_download = parsed_download.attachments().count();
+        let name_download = parsed_download
+            .attachments()
+            .next()
+            .and_then(|a| a.attachment_name().map(|s| s.to_string()));
+
+        assert_eq!(count_insert, count_download);
+        assert_eq!(name_insert, name_download);
+    }
 }

@@ -191,6 +191,38 @@ async fn test_email_deletion_and_disk_cleanup_flow() {
     .await;
 }
 
+fn build_multipart_request(
+    boundary: &str,
+    draft_id: Option<&str>,
+    from_alias_id: &str,
+    to_email: &str,
+    subject: &str,
+    body_text: &str,
+) -> (Vec<u8>, String) {
+    let mut body = Vec::new();
+
+    let mut append_text = |name: &str, value: &str| {
+        body.extend_from_slice(format!("--{}\r\n", boundary).as_bytes());
+        body.extend_from_slice(
+            format!("Content-Disposition: form-data; name=\"{}\"\r\n\r\n", name).as_bytes(),
+        );
+        body.extend_from_slice(format!("{}\r\n", value).as_bytes());
+    };
+
+    if let Some(id) = draft_id {
+        append_text("draft_id", id);
+    }
+    append_text("from_alias_id", from_alias_id);
+    append_text("to_email", to_email);
+    append_text("subject", subject);
+    append_text("body_text", body_text);
+
+    body.extend_from_slice(format!("--{}--\r\n", boundary).as_bytes());
+
+    let content_type_header = format!("multipart/form-data; boundary={}", boundary);
+    (body, content_type_header)
+}
+
 #[tokio::test]
 async fn test_send_saved_draft_flow_success() {
     // Install the Rustls process-level CryptoProvider
@@ -201,26 +233,51 @@ async fn test_send_saved_draft_flow_success() {
         let temp_storage_dir = tempfile::tempdir().unwrap();
 
         // 2. Setup mock test user, alias and TWO draft emails
-        let user = common::create_test_user(&db, "test_admin@example.com", "my_secure_password123").await;
+        let user =
+            common::create_test_user(&db, "test_admin@example.com", "my_secure_password123").await;
 
         // Grant permissions to the test user to satisfy FirsthandSenderUser extractor
         common::grant_user_sender_permissions(&db, user.id).await;
 
-        let alias = common::create_test_alias(&db, user.id, "example.com", "hello", "dest@gmail.com").await;
-        let draft1 = common::create_test_draft(&db, user.id, alias.id, "someone1@external.com", "Draft-Subject-1", EmailStatus::Draft).await;
-        let draft2 = common::create_test_draft(&db, user.id, alias.id, "someone2@external.com", "Draft-Subject-2", EmailStatus::Draft).await;
+        let alias =
+            common::create_test_alias(&db, user.id, "example.com", "hello", "dest@gmail.com").await;
+        let draft1 = common::create_test_draft(
+            &db,
+            user.id,
+            alias.id,
+            "someone1@external.com",
+            "Draft-Subject-1",
+            EmailStatus::Draft,
+        )
+        .await;
+        let draft2 = common::create_test_draft(
+            &db,
+            user.id,
+            alias.id,
+            "someone2@external.com",
+            "Draft-Subject-2",
+            EmailStatus::Draft,
+        )
+        .await;
 
         // Write the physical files representing draft bodies on disk matching draft.body_key
         let draft1_file_path = temp_storage_dir.path().join(draft1.body_key.to_string());
-        tokio::fs::write(&draft1_file_path, b"Mock raw draft body payload 1").await.unwrap();
+        tokio::fs::write(&draft1_file_path, b"Mock raw draft body payload 1")
+            .await
+            .unwrap();
         assert!(draft1_file_path.exists());
 
         let draft2_file_path = temp_storage_dir.path().join(draft2.body_key.to_string());
-        tokio::fs::write(&draft2_file_path, b"Mock raw draft body payload 2").await.unwrap();
+        tokio::fs::write(&draft2_file_path, b"Mock raw draft body payload 2")
+            .await
+            .unwrap();
         assert!(draft2_file_path.exists());
 
         // 3. Create App State
-        let resolver = hickory_resolver::TokioResolver::builder_tokio().unwrap().build().unwrap();
+        let resolver = hickory_resolver::TokioResolver::builder_tokio()
+            .unwrap()
+            .build()
+            .unwrap();
         let dns_scanner = DnsScanner::new(resolver.clone());
         let outbound = Arc::new(OutboundService::new(
             "srs_secret_key_123".to_string(),
@@ -242,15 +299,24 @@ async fn test_send_saved_draft_flow_success() {
         let app_router = create_app(state).await;
 
         // 4. Authenticate via login
-        let auth_cookie = common::get_auth_cookie(app_router.clone(), "test_admin@example.com", "my_secure_password123").await;
+        let auth_cookie = common::get_auth_cookie(
+            app_router.clone(),
+            "test_admin@example.com",
+            "my_secure_password123",
+        )
+        .await;
 
         // Extract CSRF token value
         let csrf_token = common::extract_csrf_token(&auth_cookie);
 
         // 5. Send POST request to send the email from the first draft
-        let payload1 = format!(
-            "draft_id={}&from_alias_id={}&to_email=recipient1@external.com&subject=Test-Subject-1&body_text=Body-Text-1",
-            draft1.id, alias.id
+        let (body1, content_type1) = build_multipart_request(
+            "boundary111",
+            Some(&draft1.id.to_string()),
+            &alias.id.to_string(),
+            "recipient1@external.com",
+            "Test-Subject-1",
+            "Body-Text-1",
         );
 
         let request1 = Request::builder()
@@ -258,17 +324,25 @@ async fn test_send_saved_draft_flow_success() {
             .uri("/api/v1/emails/send")
             .header(axum::http::header::COOKIE, auth_cookie.clone())
             .header("X-CSRF-Token", csrf_token.clone())
-            .header(axum::http::header::CONTENT_TYPE, "application/x-www-form-urlencoded")
-            .body(Body::from(payload1))
+            .header(axum::http::header::CONTENT_TYPE, content_type1)
+            .body(Body::from(body1))
             .unwrap();
 
         let response1 = app_router.clone().oneshot(request1).await.unwrap();
-        assert_ne!(response1.status(), StatusCode::UNPROCESSABLE_ENTITY, "Form binding failed for draft1!");
+        assert_ne!(
+            response1.status(),
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "Form binding failed for draft1!"
+        );
 
         // 6. Send POST request to send the email from the second draft
-        let payload2 = format!(
-            "draft_id={}&from_alias_id={}&to_email=recipient2@external.com&subject=Test-Subject-2&body_text=Body-Text-2",
-            draft2.id, alias.id
+        let (body2, content_type2) = build_multipart_request(
+            "boundary222",
+            Some(&draft2.id.to_string()),
+            &alias.id.to_string(),
+            "recipient2@external.com",
+            "Test-Subject-2",
+            "Body-Text-2",
         );
 
         let request2 = Request::builder()
@@ -276,12 +350,16 @@ async fn test_send_saved_draft_flow_success() {
             .uri("/api/v1/emails/send")
             .header(axum::http::header::COOKIE, auth_cookie)
             .header("X-CSRF-Token", csrf_token)
-            .header(axum::http::header::CONTENT_TYPE, "application/x-www-form-urlencoded")
-            .body(Body::from(payload2))
+            .header(axum::http::header::CONTENT_TYPE, content_type2)
+            .body(Body::from(body2))
             .unwrap();
 
         let response2 = app_router.oneshot(request2).await.unwrap();
-        assert_ne!(response2.status(), StatusCode::UNPROCESSABLE_ENTITY, "Form binding failed for draft2!");
+        assert_ne!(
+            response2.status(),
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "Form binding failed for draft2!"
+        );
 
         // 7. Verify both draft statuses transitioned away from 'draft' in the database
         for draft in &[draft1, draft2] {
@@ -301,7 +379,11 @@ async fn test_send_saved_draft_flow_success() {
                         .unwrap()
                 }
             };
-            assert_ne!(status_str, "draft", "Draft {} status remained 'draft' after sending!", draft.id);
+            assert_ne!(
+                status_str, "draft",
+                "Draft {} status remained 'draft' after sending!",
+                draft.id
+            );
         }
 
         // 8. Verify both raw draft files were successfully cleaned up and deleted from disk!
@@ -314,9 +396,14 @@ async fn test_send_saved_draft_flow_success() {
                 }
                 tokio::time::sleep(std::time::Duration::from_millis(50)).await;
             }
-            assert!(file_deleted, "Storage draft file {:?} was not physically deleted from disk after sending!", draft_file_path);
+            assert!(
+                file_deleted,
+                "Storage draft file {:?} was not physically deleted from disk after sending!",
+                draft_file_path
+            );
         }
-    }).await;
+    })
+    .await;
 }
 
 #[tokio::test]
@@ -449,10 +536,12 @@ async fn test_send_already_sent_email_fails_and_prevents_file_deletion() {
         let temp_storage_dir = tempfile::tempdir().unwrap();
 
         // 2. Setup mock test user, alias and an already SENT email (not draft)
-        let user = common::create_test_user(&db, "test_admin@example.com", "my_secure_password123").await;
+        let user =
+            common::create_test_user(&db, "test_admin@example.com", "my_secure_password123").await;
         common::grant_user_sender_permissions(&db, user.id).await;
 
-        let alias = common::create_test_alias(&db, user.id, "example.com", "hello", "dest@gmail.com").await;
+        let alias =
+            common::create_test_alias(&db, user.id, "example.com", "hello", "dest@gmail.com").await;
         let sent_email = common::create_test_draft(
             &db,
             user.id,
@@ -464,12 +553,19 @@ async fn test_send_already_sent_email_fails_and_prevents_file_deletion() {
         .await;
 
         // Write the physical file representing the sent email's body on disk matching sent_email.body_key
-        let sent_email_file_path = temp_storage_dir.path().join(sent_email.body_key.to_string());
-        tokio::fs::write(&sent_email_file_path, b"My precious sent email payload").await.unwrap();
+        let sent_email_file_path = temp_storage_dir
+            .path()
+            .join(sent_email.body_key.to_string());
+        tokio::fs::write(&sent_email_file_path, b"My precious sent email payload")
+            .await
+            .unwrap();
         assert!(sent_email_file_path.exists());
 
         // 3. Create App State
-        let resolver = hickory_resolver::TokioResolver::builder_tokio().unwrap().build().unwrap();
+        let resolver = hickory_resolver::TokioResolver::builder_tokio()
+            .unwrap()
+            .build()
+            .unwrap();
         let dns_scanner = DnsScanner::new(resolver.clone());
         let outbound = Arc::new(OutboundService::new(
             "srs_secret_key_123".to_string(),
@@ -491,13 +587,22 @@ async fn test_send_already_sent_email_fails_and_prevents_file_deletion() {
         let app_router = create_app(state).await;
 
         // 4. Authenticate via login
-        let auth_cookie = common::get_auth_cookie(app_router.clone(), "test_admin@example.com", "my_secure_password123").await;
+        let auth_cookie = common::get_auth_cookie(
+            app_router.clone(),
+            "test_admin@example.com",
+            "my_secure_password123",
+        )
+        .await;
         let csrf_token = common::extract_csrf_token(&auth_cookie);
 
         // 5. Try to POST a request to send this email using the sent_email's ID as the draft_id
-        let payload = format!(
-            "draft_id={}&from_alias_id={}&to_email=recipient@external.com&subject=Test-Subject&body_text=Stale-Body",
-            sent_email.id, alias.id
+        let (body, content_type) = build_multipart_request(
+            "boundary333",
+            Some(&sent_email.id.to_string()),
+            &alias.id.to_string(),
+            "recipient@external.com",
+            "Test-Subject",
+            "Stale-Body",
         );
 
         let request = Request::builder()
@@ -505,8 +610,8 @@ async fn test_send_already_sent_email_fails_and_prevents_file_deletion() {
             .uri("/api/v1/emails/send")
             .header(axum::http::header::COOKIE, auth_cookie)
             .header("X-CSRF-Token", csrf_token)
-            .header(axum::http::header::CONTENT_TYPE, "application/x-www-form-urlencoded")
-            .body(Body::from(payload))
+            .header(axum::http::header::CONTENT_TYPE, content_type)
+            .body(Body::from(body))
             .unwrap();
 
         let response = app_router.oneshot(request).await.unwrap();
@@ -516,8 +621,12 @@ async fn test_send_already_sent_email_fails_and_prevents_file_deletion() {
 
         // 7. Wait a moment and verify that the sent email's body file was NOT deleted!
         tokio::time::sleep(std::time::Duration::from_millis(150)).await;
-        assert!(sent_email_file_path.exists(), "The sent email's body file was wrongly deleted from disk!");
-    }).await;
+        assert!(
+            sent_email_file_path.exists(),
+            "The sent email's body file was wrongly deleted from disk!"
+        );
+    })
+    .await;
 }
 
 #[tokio::test]

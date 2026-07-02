@@ -266,3 +266,77 @@ pub async fn insert_email_with_attachments(
         }
     }
 }
+
+#[allow(clippy::too_many_arguments)]
+pub async fn insert_attachment(
+    pool: &DbPool,
+    id: Uuid,
+    email_id: Uuid,
+    filename: Option<&str>,
+    content_type: Option<&str>,
+    size_bytes: i64,
+    part_index: i32,
+    is_inline: bool,
+    content_id: Option<&str>,
+) -> Result<(), sqlx::Error> {
+    match pool {
+        DbPool::Postgres(pool) => {
+            sqlx::query(
+                r#"INSERT INTO attachments (
+                    id, email_id, filename, content_type, size_bytes, part_index, is_inline, content_id, created_at
+                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())"#,
+            )
+            .bind(id)
+            .bind(email_id)
+            .bind(filename)
+            .bind(content_type)
+            .bind(size_bytes)
+            .bind(part_index)
+            .bind(is_inline)
+            .bind(content_id)
+            .execute(pool)
+            .await?;
+            Ok(())
+        }
+        DbPool::Sqlite(pool) => {
+            sqlx::query(
+                r#"INSERT INTO attachments (
+                    id, email_id, filename, content_type, size_bytes, part_index, is_inline, content_id, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)"#,
+            )
+            .bind(id)
+            .bind(email_id)
+            .bind(filename)
+            .bind(content_type)
+            .bind(size_bytes)
+            .bind(part_index)
+            .bind(is_inline)
+            .bind(content_id)
+            .execute(pool)
+            .await?;
+            Ok(())
+        }
+    }
+}
+
+pub async fn delete_attachments_for_email(
+    pool: &DbPool,
+    email_id: Uuid,
+) -> Result<(), sqlx::Error> {
+    match pool {
+        DbPool::Postgres(pool) => {
+            sqlx::query("DELETE FROM attachments WHERE email_id = $1")
+                .bind(email_id)
+                .execute(pool)
+                .await?;
+            Ok(())
+        }
+        DbPool::Sqlite(pool) => {
+            sqlx::query("DELETE FROM attachments WHERE email_id = ?")
+                .bind(email_id)
+                .execute(pool)
+                .await?;
+            Ok(())
+        }
+    }
+}
