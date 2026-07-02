@@ -1,7 +1,7 @@
 use crate::db::sent_emails::{
     get_sent_email_by_id_and_user, mark_sent_email_failed, mark_sent_email_success, upsert_draft,
 };
-use crate::db::{get_alias_by_id_and_user, DbPool};
+use crate::db::{DbPool, get_alias_by_id_and_user};
 use crate::fs::write_file_async_with_permissions;
 use crate::outbound::mime::{Attachment, MimeEmail, build_mime, sanitize_header};
 use crate::web::i18n::{Locale, Messages};
@@ -71,9 +71,7 @@ pub async fn compose_modal_handler(
     let mut selected_alias_id = None;
 
     if let Some(id) = query.draft_id {
-        if let Ok(Some(draft)) =
-            get_sent_email_by_id_and_user(&state.db, id, user.0.user_id)
-                .await
+        if let Ok(Some(draft)) = get_sent_email_by_id_and_user(&state.db, id, user.0.user_id).await
         {
             draft_id = Some(draft.id);
             to_email = draft.to_address;
@@ -316,12 +314,7 @@ pub async fn submit_email_handler(
     // preventing orphaned plain-text draft files from leaking on the host filesystem.
     let mut old_draft_body_key = None;
     if let Some(d_id) = draft_id {
-        let draft_res = get_sent_email_by_id_and_user(
-            &state.db,
-            d_id,
-            auth_user.user_id,
-        )
-        .await;
+        let draft_res = get_sent_email_by_id_and_user(&state.db, d_id, auth_user.user_id).await;
         if let Ok(Some(draft)) = draft_res {
             old_draft_body_key = Some(draft.body_key);
         }
@@ -463,12 +456,8 @@ pub async fn submit_email_handler(
                     // Clean up the old raw draft file from disk to prevent leakage
                     old_draft_cleanup(state.storage_dir.clone(), old_draft_body_key);
 
-                    if let Err(err) = mark_sent_email_success(
-                        &state.db,
-                        upserted_id,
-                        &message_id,
-                    )
-                    .await
+                    if let Err(err) =
+                        mark_sent_email_success(&state.db, upserted_id, &message_id).await
                     {
                         tracing::error!(
                             "Database error marking sent email success for {}: {}",
@@ -537,12 +526,8 @@ pub async fn submit_email_handler(
                     // Clean up the old raw draft file from disk to prevent leakage
                     old_draft_cleanup(state.storage_dir.clone(), old_draft_body_key);
 
-                    if let Err(err) = mark_sent_email_failed(
-                        &state.db,
-                        upserted_id,
-                        &e.to_string(),
-                    )
-                    .await
+                    if let Err(err) =
+                        mark_sent_email_failed(&state.db, upserted_id, &e.to_string()).await
                     {
                         tracing::error!(
                             "Database error marking sent email failed for {}: {}",
@@ -586,13 +571,7 @@ pub async fn save_draft_handler(
     let body_key = if let Some(draft_id) = payload.draft_id {
         // If a draft already exists, fetch its existing body_key to overwrite the same file
         // preventing orphaned files from piling up on disk.
-        match get_sent_email_by_id_and_user(
-            &state.db,
-            draft_id,
-            auth_user.user_id,
-        )
-        .await
-        {
+        match get_sent_email_by_id_and_user(&state.db, draft_id, auth_user.user_id).await {
             Ok(Some(draft)) => draft.body_key,
             _ => Uuid::new_v4(), // Fallback if someone sends a bogus draft_id
         }

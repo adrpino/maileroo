@@ -247,7 +247,11 @@ async fn perform_smart_delete(
 
         if deleted {
             if let Err(err) = delete_attachments_for_email(&state.db, email_id).await {
-                tracing::error!("Failed to delete attachments for email {}: {}", email_id, err);
+                tracing::error!(
+                    "Failed to delete attachments for email {}: {}",
+                    email_id,
+                    err
+                );
             }
             let file_path = state.storage_dir.join(body_key.to_string());
             let eml_path = state.storage_dir.join(format!("{}.eml", body_key));
