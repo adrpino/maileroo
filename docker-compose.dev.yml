@@ -24,6 +24,15 @@ services:
     volumes:
       - step_ca_data:/home/step
 
+  mailhog:
+    image: mailhog/mailhog:latest
+    ports:
+      - "1025:1025"   # SMTP — the app points here
+      - "8025:8025"   # HTTP API — tests assert here
+    volumes:
+      - mailhog_data:/maildir
+
 volumes:
   maily_test_db_data:
   step_ca_data:
+  mailhog_data:
