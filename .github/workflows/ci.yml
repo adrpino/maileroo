@@ -58,6 +58,7 @@ jobs:
         run: |
           docker build -t maileroo:e2e .
           mkdir -p storage/e2e
+          sudo chown -R 10001:10001 storage/e2e
           docker run -d --name maileroo-e2e \
             --network host \
             -e STORAGE_DIR=/app/storage \
