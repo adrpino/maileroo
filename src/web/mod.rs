@@ -29,6 +29,9 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use uuid::Uuid;
 
+/// Global configuration for session and CSRF cookie expiration (7 days in seconds).
+pub const SESSION_MAX_AGE_SECONDS: i64 = 7 * 24 * 60 * 60;
+
 use crate::db::attachments::get_attachments_for_email;
 use crate::dns::DnsScanner;
 use axum_server::tls_rustls::RustlsConfig;
@@ -530,7 +533,9 @@ pub async fn create_app(state: AppState) -> Router {
             let mut session_layer = SessionManagerLayer::new(session_store)
                 .with_secure(secure_cookies)
                 .with_same_site(tower_sessions::cookie::SameSite::Lax)
-                .with_expiry(Expiry::OnInactivity(time::Duration::days(7)));
+                .with_expiry(Expiry::OnInactivity(time::Duration::seconds(
+                    SESSION_MAX_AGE_SECONDS,
+                )));
             if !cookie_domain.is_empty() {
                 session_layer = session_layer.with_domain(cookie_domain);
             }
@@ -542,7 +547,9 @@ pub async fn create_app(state: AppState) -> Router {
             let mut session_layer = SessionManagerLayer::new(session_store)
                 .with_secure(secure_cookies)
                 .with_same_site(tower_sessions::cookie::SameSite::Lax)
-                .with_expiry(Expiry::OnInactivity(time::Duration::days(7)));
+                .with_expiry(Expiry::OnInactivity(time::Duration::seconds(
+                    SESSION_MAX_AGE_SECONDS,
+                )));
             if !cookie_domain.is_empty() {
                 session_layer = session_layer.with_domain(cookie_domain);
             }
