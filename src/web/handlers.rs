@@ -208,8 +208,8 @@ pub async fn login_handler(
 
         let cookie_domain = crate::config::get_config("COOKIE_DOMAIN", "");
         let mut cookie = format!(
-            "csrf_token={}; Path=/; SameSite=Lax; Max-Age={}", 
-            csrf_token, 
+            "csrf_token={}; Path=/; SameSite=Lax; Max-Age={}",
+            csrf_token,
             crate::web::SESSION_MAX_AGE_SECONDS
         );
         if !cookie_domain.is_empty() {

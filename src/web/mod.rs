@@ -533,7 +533,9 @@ pub async fn create_app(state: AppState) -> Router {
             let mut session_layer = SessionManagerLayer::new(session_store)
                 .with_secure(secure_cookies)
                 .with_same_site(tower_sessions::cookie::SameSite::Lax)
-                .with_expiry(Expiry::OnInactivity(time::Duration::seconds(SESSION_MAX_AGE_SECONDS)));
+                .with_expiry(Expiry::OnInactivity(time::Duration::seconds(
+                    SESSION_MAX_AGE_SECONDS,
+                )));
             if !cookie_domain.is_empty() {
                 session_layer = session_layer.with_domain(cookie_domain);
             }
@@ -545,7 +547,9 @@ pub async fn create_app(state: AppState) -> Router {
             let mut session_layer = SessionManagerLayer::new(session_store)
                 .with_secure(secure_cookies)
                 .with_same_site(tower_sessions::cookie::SameSite::Lax)
-                .with_expiry(Expiry::OnInactivity(time::Duration::seconds(SESSION_MAX_AGE_SECONDS)));
+                .with_expiry(Expiry::OnInactivity(time::Duration::seconds(
+                    SESSION_MAX_AGE_SECONDS,
+                )));
             if !cookie_domain.is_empty() {
                 session_layer = session_layer.with_domain(cookie_domain);
             }
