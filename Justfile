@@ -41,3 +41,16 @@ test:
 # Clean the environment (stops DB and removes .env)
 clean: db-down
 	rm -f .env
+
+# Run the app wired to MailHog for local E2E tests.
+# Uses a dedicated SQLite DB + storage dir so it never touches dev data.
+e2e-run:
+	./scripts/e2e-run.sh
+
+# Clean E2E storage and temporary files
+e2e-clean:
+	rm -rf ./storage/e2e ./e2e/.auth ./e2e/playwright-report
+
+# Run the complete E2E test suite automatically (handles dependencies, server lifecycle, and tests)
+e2e-test:
+	./scripts/e2e-test.sh

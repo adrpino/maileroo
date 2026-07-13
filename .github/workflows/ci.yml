@@ -12,6 +12,22 @@ env:
 jobs:
   test:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:15-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: maily
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/maily
     steps:
       - uses: actions/checkout@v4
       - name: Install Rust toolchain
@@ -28,3 +44,69 @@ jobs:
         run: cargo build --verbose
       - name: Run tests
         run: cargo test --verbose
+
+  e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Start MailHog
+        run: |
+          docker run -d --name mailhog \
+            -p 1025:1025 -p 8025:8025 \
+            mailhog/mailhog:latest
+      - name: Build and run maileroo
+        run: |
+          docker build -t maileroo:e2e .
+          mkdir -p storage/e2e
+          sudo chown -R 10001:10001 storage/e2e
+          docker run -d --name maileroo-e2e \
+            --network host \
+            -e STORAGE_DIR=/app/storage \
+            -e DATABASE_URL="sqlite:///app/storage/maileroo.db?mode=rwc" \
+            -e SMTP_ADDR=127.0.0.1:2526 \
+            -e WEB_ADDR=127.0.0.1:3001 \
+            -e SRS_SECRET=e2e-srs-secret \
+            -e PROD_DOMAIN=localhost \
+            -e SECURE_COOKIES=false \
+            -e COOKIE_DOMAIN= \
+            -e SMTP_RELAY_TOKEN=mailhog \
+            -e SMTP_RELAY_HOST=127.0.0.1 \
+            -e SMTP_RELAY_PORT=1025 \
+            -e SMTP_RELAY_USER= \
+            -e ADMIN_EMAIL=admin@e2e.test \
+            -e ADMIN_PASSWORD=e2e-admin-password \
+            -v $(pwd)/storage/e2e:/app/storage \
+            maileroo:e2e
+      - name: Wait for app
+        run: |
+          for i in $(seq 1 30); do
+            curl -sf http://localhost:3001/health && break
+            sleep 1
+          done
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Install Playwright
+        working-directory: e2e
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium
+      - name: Run E2E tests
+        working-directory: e2e
+        env:
+          E2E_BASE_URL: http://localhost:3001
+          MAILHOG_API: http://localhost:8025
+          E2E_ADMIN_EMAIL: admin@e2e.test
+          E2E_ADMIN_PASSWORD: e2e-admin-password
+        run: npx playwright test
+      - name: Upload Playwright report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: e2e/playwright-report
+          retention-days: 14
+      - name: Dump app logs on failure
+        if: failure()
+        run: docker logs maileroo-e2e || true
