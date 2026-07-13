@@ -371,3 +371,592 @@ async fn test_outbound_queue_daemon_periodic_delivery_e2e() {
     })
     .await;
 }
+
+#[tokio::test]
+async fn failing_retry_increments_attempts_and_does_not_duplicate() {
+    common::run_on_all_dbs(|db| async move {
+        let temp = tempfile::tempdir().unwrap();
+
+        // Transient-failure relay: accept the TCP connection, then drop it.
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            if let Ok((s, _)) = listener.accept().await {
+                drop(s);
+            }
+        });
+
+        let resolver = hickory_resolver::TokioResolver::builder_tokio()
+            .unwrap()
+            .build()
+            .unwrap();
+        let outbound = std::sync::Arc::new(
+            maileroo::outbound::OutboundService::new(
+                "srs".into(),
+                resolver,
+                "example.com".into(),
+                db.clone(),
+                temp.path().to_path_buf(),
+            )
+            .with_relay_override(maileroo::outbound::relay::RelayConfig {
+                host: "127.0.0.1".into(),
+                port,
+                user: "api".into(),
+                pass: "tok".into(),
+            }),
+        );
+
+        // Seed a job (attempts = 0) eligible now.
+        let id = uuid::Uuid::new_v4();
+        let eml = maileroo::outbound::get_job_file_path(temp.path(), id);
+        tokio::fs::create_dir_all(eml.parent().unwrap())
+            .await
+            .unwrap();
+        tokio::fs::write(&eml, b"Subject: x\r\n\r\nbody")
+            .await
+            .unwrap();
+        maileroo::db::queue::insert_job(&db, id, "s@example.com", "r@ext.com")
+            .await
+            .unwrap();
+
+        maileroo::outbound::process_queue_tick(&db, temp.path(), outbound)
+            .await
+            .unwrap();
+
+        // Same row, attempts incremented, still pending, backoff in the future, file kept.
+        let count = match db {
+            DbPool::Sqlite(ref p) => {
+                let cnt: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM outbound_queue")
+                    .fetch_one(p)
+                    .await
+                    .unwrap();
+                cnt as usize
+            }
+            DbPool::Postgres(ref p) => {
+                let cnt: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM outbound_queue")
+                    .fetch_one(p)
+                    .await
+                    .unwrap();
+                cnt as usize
+            }
+        };
+        assert_eq!(count, 1, "must not create a duplicate job on failed retry");
+
+        let (attempts, status, next_retry_at) = match db {
+            DbPool::Sqlite(ref p) => {
+                let res: (i32, String, OffsetDateTime) = sqlx::query_as(
+                    "SELECT attempts, status, next_retry_at FROM outbound_queue WHERE id = ?",
+                )
+                .bind(id)
+                .fetch_one(p)
+                .await
+                .unwrap();
+                (res.0, res.1, res.2)
+            }
+            DbPool::Postgres(ref p) => {
+                let res: (i32, String, OffsetDateTime) = sqlx::query_as(
+                    "SELECT attempts, status, next_retry_at FROM outbound_queue WHERE id = $1",
+                )
+                .bind(id)
+                .fetch_one(p)
+                .await
+                .unwrap();
+                (res.0, res.1, res.2)
+            }
+        };
+
+        assert_eq!(attempts, 1, "attempts must increment");
+        assert_eq!(status, "pending");
+        assert!(
+            next_retry_at > OffsetDateTime::now_utc(),
+            "backoff must push next_retry_at into the future, got {next_retry_at}"
+        );
+        assert!(eml.exists(), "EML must be retained for the next attempt");
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn permanent_failure_fails_fast() {
+    common::run_on_all_dbs(|db| async move {
+        let temp = tempfile::tempdir().unwrap();
+
+        // Relay mock rejecting with permanent 550
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            if let Ok((socket, _)) = listener.accept().await {
+                let mut reader = BufReader::new(socket);
+                let mut buf = String::new();
+
+                // Banner
+                reader
+                    .get_mut()
+                    .write_all(b"220 smtp.mockrelay.com\r\n")
+                    .await
+                    .unwrap();
+
+                // EHLO
+                reader.read_line(&mut buf).await.unwrap();
+                reader
+                    .get_mut()
+                    .write_all(b"250-smtp.mockrelay.com\r\n250 AUTH PLAIN\r\n")
+                    .await
+                    .unwrap();
+
+                // AUTH
+                buf.clear();
+                reader.read_line(&mut buf).await.unwrap();
+                reader
+                    .get_mut()
+                    .write_all(b"235 Auth successful\r\n")
+                    .await
+                    .unwrap();
+
+                // MAIL FROM - Reject with 550
+                buf.clear();
+                reader.read_line(&mut buf).await.unwrap();
+                reader
+                    .get_mut()
+                    .write_all(b"550 User not allowed\r\n")
+                    .await
+                    .unwrap();
+            }
+        });
+
+        let resolver = hickory_resolver::TokioResolver::builder_tokio()
+            .unwrap()
+            .build()
+            .unwrap();
+        let outbound = std::sync::Arc::new(
+            maileroo::outbound::OutboundService::new(
+                "srs".into(),
+                resolver,
+                "example.com".into(),
+                db.clone(),
+                temp.path().to_path_buf(),
+            )
+            .with_relay_override(maileroo::outbound::relay::RelayConfig {
+                host: "127.0.0.1".into(),
+                port,
+                user: "api".into(),
+                pass: "tok".into(),
+            }),
+        );
+
+        // Seed a job
+        let id = uuid::Uuid::new_v4();
+        let eml = maileroo::outbound::get_job_file_path(temp.path(), id);
+        tokio::fs::create_dir_all(eml.parent().unwrap())
+            .await
+            .unwrap();
+        tokio::fs::write(&eml, b"Subject: x\r\n\r\nbody")
+            .await
+            .unwrap();
+        maileroo::db::queue::insert_job(&db, id, "s@example.com", "r@ext.com")
+            .await
+            .unwrap();
+
+        maileroo::outbound::process_queue_tick(&db, temp.path(), outbound)
+            .await
+            .unwrap();
+
+        let (attempts, status) = match db {
+            DbPool::Sqlite(ref p) => {
+                let res: (i32, String) =
+                    sqlx::query_as("SELECT attempts, status FROM outbound_queue WHERE id = ?")
+                        .bind(id)
+                        .fetch_one(p)
+                        .await
+                        .unwrap();
+                (res.0, res.1)
+            }
+            DbPool::Postgres(ref p) => {
+                let res: (i32, String) =
+                    sqlx::query_as("SELECT attempts, status FROM outbound_queue WHERE id = $1")
+                        .bind(id)
+                        .fetch_one(p)
+                        .await
+                        .unwrap();
+                (res.0, res.1)
+            }
+        };
+
+        assert_eq!(attempts, 1, "attempts must increment on failed run");
+        assert_eq!(
+            status, "failed",
+            "permanent failure must immediately fail the job"
+        );
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn exhausts_max_attempts_then_stops() {
+    common::run_on_all_dbs(|db| async move {
+        let temp = tempfile::tempdir().unwrap();
+
+        // Transient failure SMTP: drop connection
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            if let Ok((s, _)) = listener.accept().await {
+                drop(s);
+            }
+        });
+
+        let resolver = hickory_resolver::TokioResolver::builder_tokio()
+            .unwrap()
+            .build()
+            .unwrap();
+        let outbound = std::sync::Arc::new(
+            maileroo::outbound::OutboundService::new(
+                "srs".into(),
+                resolver,
+                "example.com".into(),
+                db.clone(),
+                temp.path().to_path_buf(),
+            )
+            .with_relay_override(maileroo::outbound::relay::RelayConfig {
+                host: "127.0.0.1".into(),
+                port,
+                user: "api".into(),
+                pass: "tok".into(),
+            }),
+        );
+
+        // Seed a job with attempts = 9 (max is 10)
+        let id = uuid::Uuid::new_v4();
+        let eml = maileroo::outbound::get_job_file_path(temp.path(), id);
+        tokio::fs::create_dir_all(eml.parent().unwrap())
+            .await
+            .unwrap();
+        tokio::fs::write(&eml, b"Subject: x\r\n\r\nbody")
+            .await
+            .unwrap();
+        maileroo::db::queue::insert_job(&db, id, "s@example.com", "r@ext.com")
+            .await
+            .unwrap();
+
+        match db {
+            DbPool::Sqlite(ref p) => {
+                sqlx::query("UPDATE outbound_queue SET attempts = 9 WHERE id = ?")
+                    .bind(id)
+                    .execute(p)
+                    .await
+                    .unwrap();
+            }
+            DbPool::Postgres(ref p) => {
+                sqlx::query("UPDATE outbound_queue SET attempts = 9 WHERE id = $1")
+                    .bind(id)
+                    .execute(p)
+                    .await
+                    .unwrap();
+            }
+        };
+
+        maileroo::outbound::process_queue_tick(&db, temp.path(), outbound)
+            .await
+            .unwrap();
+
+        let (attempts, status) = match db {
+            DbPool::Sqlite(ref p) => {
+                let res: (i32, String) =
+                    sqlx::query_as("SELECT attempts, status FROM outbound_queue WHERE id = ?")
+                        .bind(id)
+                        .fetch_one(p)
+                        .await
+                        .unwrap();
+                (res.0, res.1)
+            }
+            DbPool::Postgres(ref p) => {
+                let res: (i32, String) =
+                    sqlx::query_as("SELECT attempts, status FROM outbound_queue WHERE id = $1")
+                        .bind(id)
+                        .fetch_one(p)
+                        .await
+                        .unwrap();
+                (res.0, res.1)
+            }
+        };
+
+        assert_eq!(attempts, 10);
+        assert_eq!(status, "failed");
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn test_mx_delivery_succeeds_with_self_signed_cert() {
+    common::run_on_all_dbs(|db| async move {
+        common::init_crypto_provider();
+
+        let temp = tempfile::tempdir().unwrap();
+        let cert_path = temp.path().join("cert.pem");
+        let key_path = temp.path().join("key.pem");
+        common::generate_dummy_certs(&cert_path, &key_path);
+
+        let cert_file = std::fs::File::open(&cert_path).unwrap();
+        let key_file = std::fs::File::open(&key_path).unwrap();
+        let certs = rustls_pemfile::certs(&mut std::io::BufReader::new(cert_file))
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        let key = rustls_pemfile::private_key(&mut std::io::BufReader::new(key_file))
+            .unwrap()
+            .unwrap();
+
+        let tls_server_config = tokio_rustls::rustls::ServerConfig::builder()
+            .with_no_client_auth()
+            .with_single_cert(certs, key)
+            .unwrap();
+        let tls_acceptor = tokio_rustls::TlsAcceptor::from(std::sync::Arc::new(tls_server_config));
+
+        let smtp_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let smtp_port = smtp_listener.local_addr().unwrap().port();
+
+        let smtp_server_handle = tokio::spawn(async move {
+            let (socket, _) = smtp_listener.accept().await.unwrap();
+            let mut reader = BufReader::new(socket);
+            let mut buf = String::new();
+
+            reader
+                .get_mut()
+                .write_all(b"220 smtp.mockmx.com Welcome\r\n")
+                .await
+                .unwrap();
+
+            reader.read_line(&mut buf).await.unwrap();
+            assert!(buf.starts_with("EHLO"));
+
+            reader
+                .get_mut()
+                .write_all(b"250-smtp.mockmx.com\r\n250 STARTTLS\r\n")
+                .await
+                .unwrap();
+
+            buf.clear();
+            reader.read_line(&mut buf).await.unwrap();
+            assert!(buf.starts_with("STARTTLS"));
+
+            reader
+                .get_mut()
+                .write_all(b"220 Go ahead with TLS upgrade\r\n")
+                .await
+                .unwrap();
+
+            let plain_stream = reader.into_inner();
+            let tls_stream = tls_acceptor.accept(plain_stream).await.unwrap();
+            let mut reader = BufReader::new(tls_stream);
+
+            buf.clear();
+            reader.read_line(&mut buf).await.unwrap();
+            assert!(buf.starts_with("EHLO"));
+
+            reader
+                .get_mut()
+                .write_all(b"250-smtp.mockmx.com\r\n250 PIPELINING\r\n")
+                .await
+                .unwrap();
+
+            buf.clear();
+            reader.read_line(&mut buf).await.unwrap();
+            assert!(buf.contains("MAIL FROM"));
+            reader.get_mut().write_all(b"250 OK\r\n").await.unwrap();
+
+            buf.clear();
+            reader.read_line(&mut buf).await.unwrap();
+            assert!(buf.contains("RCPT TO"));
+            reader.get_mut().write_all(b"250 OK\r\n").await.unwrap();
+
+            buf.clear();
+            reader.read_line(&mut buf).await.unwrap();
+            assert!(buf.contains("DATA"));
+            reader
+                .get_mut()
+                .write_all(b"354 Start input\r\n")
+                .await
+                .unwrap();
+
+            loop {
+                buf.clear();
+                reader.read_line(&mut buf).await.unwrap();
+                if buf == ".\r\n" {
+                    break;
+                }
+            }
+            reader
+                .get_mut()
+                .write_all(b"250 Message accepted for delivery\r\n")
+                .await
+                .unwrap();
+
+            buf.clear();
+            reader.read_line(&mut buf).await.unwrap();
+            assert!(buf.starts_with("QUIT"));
+            reader
+                .get_mut()
+                .write_all(b"221 Goodbye\r\n")
+                .await
+                .unwrap();
+        });
+
+        let dns_socket = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let dns_port = dns_socket.local_addr().unwrap().port();
+
+        tokio::spawn(async move {
+            let mut buf = [0u8; 512];
+            loop {
+                if let Ok((len, src)) = dns_socket.recv_from(&mut buf).await {
+                    let query = &buf[..len];
+                    let mut response = Vec::new();
+                    response.extend_from_slice(&query[0..2]);
+                    response.extend_from_slice(&[0x81, 0x80]);
+                    response.extend_from_slice(&[0x00, 0x01]);
+                    response.extend_from_slice(&[0x00, 0x01]);
+                    response.extend_from_slice(&[0x00, 0x00, 0x00, 0x00]);
+
+                    let mut name_end = 12;
+                    while name_end < query.len() && query[name_end] != 0 {
+                        name_end += 1;
+                    }
+                    if name_end + 5 <= query.len() {
+                        let question_end = name_end + 5;
+                        let qtype =
+                            (query[name_end + 1] as u16) << 8 | (query[name_end + 2] as u16);
+
+                        response.extend_from_slice(&query[12..question_end]);
+
+                        response.extend_from_slice(&[0xc0, 0x0c]);
+                        if qtype == 15 {
+                            response.extend_from_slice(&[0x00, 0x0f]);
+                            response.extend_from_slice(&[0x00, 0x01]);
+                            response.extend_from_slice(&[0x00, 0x00, 0x00, 0x3c]);
+                            response.extend_from_slice(&[0x00, 0x0d]);
+                            response.extend_from_slice(&[0x00, 0x00]);
+                            response.extend_from_slice(b"\x09localhost\x00");
+                        } else {
+                            response.extend_from_slice(&[0x00, 0x01]);
+                            response.extend_from_slice(&[0x00, 0x01]);
+                            response.extend_from_slice(&[0x00, 0x00, 0x00, 0x3c]);
+                            response.extend_from_slice(&[0x00, 0x04]);
+                            response.extend_from_slice(&[127, 0, 0, 1]);
+                        }
+
+                        let _ = dns_socket.send_to(&response, src).await;
+                    }
+                }
+            }
+        });
+
+        use hickory_resolver::config::{NameServerConfig, ResolverConfig};
+        use hickory_resolver::net::runtime::TokioRuntimeProvider;
+        use std::net::{IpAddr, Ipv4Addr};
+
+        let mut ns_config = NameServerConfig::udp(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)));
+        ns_config.connections[0].port = dns_port;
+
+        let dns_config = ResolverConfig::from_parts(None, vec![], vec![ns_config]);
+        let resolver = hickory_resolver::TokioResolver::builder_with_config(
+            dns_config,
+            TokioRuntimeProvider::default(),
+        )
+        .build()
+        .unwrap();
+
+        let outbound = OutboundService::new(
+            "srs".into(),
+            resolver,
+            "example.com".into(),
+            db.clone(),
+            temp.path().to_path_buf(),
+        )
+        .with_mx_port(smtp_port);
+
+        let res = outbound
+            .send_firsthand(
+                "receiver@testmx.com",
+                "sender@example.com",
+                b"Subject: test\r\n\r\ntest body",
+            )
+            .await;
+
+        assert!(
+            res.is_ok(),
+            "Delivery should succeed through opportunistic TLS verifier: {:?}",
+            res.err()
+        );
+        smtp_server_handle.await.unwrap();
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn test_relay_delivery_fails_with_self_signed_cert() {
+    common::run_on_all_dbs(|db| async move {
+        common::init_crypto_provider();
+
+        let temp = tempfile::tempdir().unwrap();
+        let cert_path = temp.path().join("cert.pem");
+        let key_path = temp.path().join("key.pem");
+        common::generate_dummy_certs(&cert_path, &key_path);
+
+        let cert_file = std::fs::File::open(&cert_path).unwrap();
+        let key_file = std::fs::File::open(&key_path).unwrap();
+        let certs = rustls_pemfile::certs(&mut std::io::BufReader::new(cert_file))
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        let key = rustls_pemfile::private_key(&mut std::io::BufReader::new(key_file))
+            .unwrap()
+            .unwrap();
+
+        let tls_server_config = tokio_rustls::rustls::ServerConfig::builder()
+            .with_no_client_auth()
+            .with_single_cert(certs, key)
+            .unwrap();
+        let tls_acceptor = tokio_rustls::TlsAcceptor::from(std::sync::Arc::new(tls_server_config));
+
+        let smtp_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let smtp_port = smtp_listener.local_addr().unwrap().port();
+
+        tokio::spawn(async move {
+            if let Ok((socket, _)) = smtp_listener.accept().await {
+                let mut reader = BufReader::new(socket);
+                let mut buf = String::new();
+
+                reader.get_mut().write_all(b"220 smtp.mockrelay.com Welcome\r\n").await.unwrap();
+
+                reader.read_line(&mut buf).await.unwrap();
+
+                reader.get_mut().write_all(b"250-smtp.mockrelay.com\r\n250 STARTTLS\r\n").await.unwrap();
+
+                buf.clear();
+                reader.read_line(&mut buf).await.unwrap();
+
+                reader.get_mut().write_all(b"220 Go ahead with TLS upgrade\r\n").await.unwrap();
+
+                let plain_stream = reader.into_inner();
+                let _ = tls_acceptor.accept(plain_stream).await;
+            }
+        });
+
+        let resolver = hickory_resolver::TokioResolver::builder_tokio().unwrap().build().unwrap();
+        let outbound = OutboundService::new(
+            "srs".into(),
+            resolver,
+            "example.com".into(),
+            db.clone(),
+            temp.path().to_path_buf(),
+        ).with_relay_override(maileroo::outbound::relay::RelayConfig {
+            host: "127.0.0.1".to_string(),
+            port: smtp_port,
+            user: "api".to_string(),
+            pass: "tok".to_string(),
+        });
+
+        let res = outbound.deliver_once("receiver@ext.com", "sender@example.com", b"Subject: test\r\n\r\ntest body").await;
+
+        assert!(res.is_err(), "Relay delivery should fail because the self-signed cert is untrusted under strict verification");
+        let err_str = res.unwrap_err().to_string();
+        assert!(err_str.contains("TLS connection failed") || err_str.contains("invalid peer certificate") || err_str.contains("UnknownIssuer"), "Error should be a TLS error, got: {}", err_str);
+    }).await;
+}

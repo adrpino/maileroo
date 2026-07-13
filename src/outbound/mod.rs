@@ -19,8 +19,16 @@ use std::task::{Context, Poll};
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader, ReadBuf};
 use tokio::net::TcpStream;
 use tokio_rustls::TlsConnector;
-use tokio_rustls::rustls::pki_types::ServerName;
-use tokio_rustls::rustls::{ClientConfig, RootCertStore};
+use tokio_rustls::rustls::client::danger::{
+    HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier,
+};
+use tokio_rustls::rustls::crypto::{
+    CryptoProvider, verify_tls12_signature, verify_tls13_signature,
+};
+use tokio_rustls::rustls::pki_types::{CertificateDer, ServerName, UnixTime};
+use tokio_rustls::rustls::{
+    ClientConfig, DigitallySignedStruct, Error as RustlsError, RootCertStore, SignatureScheme,
+};
 use tracing::info;
 
 pin_project! {
@@ -76,11 +84,13 @@ use std::path::PathBuf;
 pub struct OutboundService {
     resolver: TokioResolver,
     client_config: Arc<ClientConfig>,
+    mx_tls_config: Arc<ClientConfig>,
     srs_secret: String,
     identity_domain: String,
     db: crate::db::DbPool,
     storage_dir: PathBuf,
     pub relay_override: Option<crate::outbound::relay::RelayConfig>,
+    pub mx_port: u16,
 }
 
 impl OutboundService {
@@ -101,19 +111,33 @@ impl OutboundService {
         let client_config = ClientConfig::builder()
             .with_root_certificates(root_store)
             .with_no_client_auth();
+
+        let provider = Arc::new(tokio_rustls::rustls::crypto::aws_lc_rs::default_provider());
+        let mx_tls_config = ClientConfig::builder()
+            .dangerous()
+            .with_custom_certificate_verifier(Arc::new(OpportunisticVerifier { provider }))
+            .with_no_client_auth();
+
         Self {
             resolver,
             client_config: Arc::new(client_config),
+            mx_tls_config: Arc::new(mx_tls_config),
             srs_secret,
             identity_domain,
             db,
             storage_dir,
             relay_override: None,
+            mx_port: 25,
         }
     }
 
     pub fn with_relay_override(mut self, config: crate::outbound::relay::RelayConfig) -> Self {
         self.relay_override = Some(config);
+        self
+    }
+
+    pub fn with_mx_port(mut self, port: u16) -> Self {
+        self.mx_port = port;
         self
     }
 
@@ -192,6 +216,18 @@ impl OutboundService {
         crate::outbound::srs::decode_srs(srs_address, &self.srs_secret)
     }
 
+    /// Attempts a single direct delivery and returns the real result.
+    /// Unlike `send_raw`, this NEVER auto-enqueues on failure. The outbound
+    /// queue worker owns retry scheduling, so it must call this, not `send_raw`.
+    pub async fn deliver_once(
+        &self,
+        to: &str,
+        from_envelope: &str,
+        body: &[u8],
+    ) -> anyhow::Result<()> {
+        self.send_raw_inner(to, from_envelope, body).await
+    }
+
     /// Internal function to send raw email data to the recipient's MX
     pub(crate) async fn send_raw(
         &self,
@@ -203,12 +239,7 @@ impl OutboundService {
             Ok(()) => Ok(()),
             Err(e) => {
                 let err_str = e.to_string();
-                let is_permanent = err_str.contains("550")
-                    || err_str.contains("554")
-                    || err_str.contains("552")
-                    || err_str.contains("501")
-                    || err_str.contains("Invalid recipient")
-                    || err_str.contains("Command contains invalid characters");
+                let is_permanent = is_permanent_delivery_error(&err_str);
 
                 if !is_permanent {
                     tracing::warn!(
@@ -352,8 +383,11 @@ impl OutboundService {
         }
         .ok_or_else(|| anyhow::anyhow!("Could not resolve IPv4 for MX {}", clean_host))?;
 
-        info!("Connecting via IPv4 to {}:25 ({})...", ip_addr, clean_host);
-        let stream = TcpStream::connect((ip_addr, 25)).await?;
+        info!(
+            "Connecting via IPv4 to {}:{} ({})...",
+            ip_addr, self.mx_port, clean_host
+        );
+        let stream = TcpStream::connect((ip_addr, self.mx_port)).await?;
 
         let any_stream = AnyStream::Tcp { stream };
         let mut response = String::new();
@@ -376,7 +410,7 @@ impl OutboundService {
             info!("STARTTLS detected, initiating upgrade...");
             Self::send_cmd(&mut buf_reader, &mut response, "STARTTLS", false).await?;
 
-            let connector = TlsConnector::from(self.client_config.clone());
+            let connector = TlsConnector::from(self.mx_tls_config.clone());
             let any_stream = buf_reader.into_inner();
             if let AnyStream::Tcp { stream } = any_stream {
                 let server_name = ServerName::try_from(clean_host.clone())?.to_owned();
@@ -546,11 +580,100 @@ impl OutboundService {
     }
 }
 
+/// Classifies an SMTP/delivery error string as permanent (do not retry) or transient (retry).
+/// Permanent = hard 5xx and malformed-input conditions; everything else is transient
+/// (connection resets, timeouts, TLS errors, 4xx greylisting, DNS, etc.).
+pub fn is_permanent_delivery_error(err: &str) -> bool {
+    err.contains("550")
+        || err.contains("554")
+        || err.contains("552")
+        || err.contains("501")
+        || err.contains("Invalid recipient")
+        || err.contains("Command contains invalid characters")
+}
+
+/// Opportunistic-TLS verifier for port-25 MX delivery: encrypts the channel but does
+/// not validate the certificate chain or hostname (RFC 7435). Standard MTA behaviour.
+/// MUST NOT be used for the authenticated relay path, which keeps strict verification.
+#[derive(Debug)]
+struct OpportunisticVerifier {
+    provider: Arc<CryptoProvider>,
+}
+
+impl ServerCertVerifier for OpportunisticVerifier {
+    fn verify_server_cert(
+        &self,
+        _end_entity: &CertificateDer<'_>,
+        _intermediates: &[CertificateDer<'_>],
+        _server_name: &ServerName<'_>,
+        _ocsp: &[u8],
+        _now: UnixTime,
+    ) -> Result<ServerCertVerified, RustlsError> {
+        Ok(ServerCertVerified::assertion())
+    }
+
+    fn verify_tls12_signature(
+        &self,
+        message: &[u8],
+        cert: &CertificateDer<'_>,
+        dss: &DigitallySignedStruct,
+    ) -> Result<HandshakeSignatureValid, RustlsError> {
+        verify_tls12_signature(
+            message,
+            cert,
+            dss,
+            &self.provider.signature_verification_algorithms,
+        )
+    }
+
+    fn verify_tls13_signature(
+        &self,
+        message: &[u8],
+        cert: &CertificateDer<'_>,
+        dss: &DigitallySignedStruct,
+    ) -> Result<HandshakeSignatureValid, RustlsError> {
+        verify_tls13_signature(
+            message,
+            cert,
+            dss,
+            &self.provider.signature_verification_algorithms,
+        )
+    }
+
+    fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
+        self.provider
+            .signature_verification_algorithms
+            .supported_schemes()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use tokio::io::AsyncWriteExt;
     use tokio::net::TcpListener;
+
+    #[test]
+    fn permanent_vs_transient_classification() {
+        assert!(is_permanent_delivery_error(
+            "SMTP Error ...: 550 No such user"
+        ));
+        assert!(is_permanent_delivery_error("554 rejected"));
+        assert!(is_permanent_delivery_error(
+            "Command contains invalid characters"
+        ));
+
+        assert!(!is_permanent_delivery_error(
+            "TLS connection failed: invalid peer certificate: UnknownIssuer"
+        ));
+        assert!(!is_permanent_delivery_error("451 Try again later"));
+        assert!(!is_permanent_delivery_error(
+            "Connection closed unexpectedly"
+        ));
+        assert!(!is_permanent_delivery_error(
+            "Could not resolve IPv4 for MX ..."
+        ));
+    }
 
     #[tokio::test]
     async fn test_outbound_relay_protocol_flow() {
