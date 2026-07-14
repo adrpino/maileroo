@@ -116,23 +116,35 @@ pub async fn process_queue_tick(
             job.max_attempts
         );
         match outbound
-            .send_raw(&job.to_recipient, &job.from_envelope, &body_bytes)
+            .deliver_once(&job.to_recipient, &job.from_envelope, &body_bytes)
             .await
         {
             Ok(_) => {
-                tracing::info!("Queue job {} successfully delivered!", job_id);
+                tracing::info!("Queue job {} successfully delivered.", job_id);
                 let _ = crate::db::queue::delete_job(pool, job_id).await;
                 let _ = tokio::fs::remove_file(&file_path).await;
             }
             Err(e) => {
                 let err_msg = e.to_string();
                 let next_attempt = job.attempts + 1;
-                tracing::warn!("Queue job {} delivery attempt failed: {}", job_id, err_msg);
 
-                if next_attempt >= job.max_attempts {
+                // Permanent failures fail fast; do not consume the whole retry budget.
+                if crate::outbound::is_permanent_delivery_error(&err_msg) {
+                    tracing::error!("Queue job {} permanently failed: {}", job_id, err_msg);
+                    let _ = crate::db::queue::update_job_status(
+                        pool,
+                        job_id,
+                        "failed",
+                        next_attempt,
+                        Some(&err_msg),
+                        OffsetDateTime::now_utc() + time::Duration::days(365),
+                    )
+                    .await;
+                } else if next_attempt >= job.max_attempts {
                     tracing::error!(
-                        "Queue job {} has exceeded maximum retries. Marking as permanently failed.",
-                        job_id
+                        "Queue job {} exceeded max retries ({}). Marking failed.",
+                        job_id,
+                        job.max_attempts
                     );
                     let _ = crate::db::queue::update_job_status(
                         pool,
@@ -145,6 +157,14 @@ pub async fn process_queue_tick(
                     .await;
                 } else {
                     let next_retry = calculate_next_retry(next_attempt);
+                    tracing::warn!(
+                        "Queue job {} attempt {}/{} failed, retrying at {}: {}",
+                        job_id,
+                        next_attempt,
+                        job.max_attempts,
+                        next_retry,
+                        err_msg
+                    );
                     let _ = crate::db::queue::update_job_status(
                         pool,
                         job_id,

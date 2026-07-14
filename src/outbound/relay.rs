@@ -48,9 +48,10 @@ pub async fn send_via_relay(
     )
     .await?;
 
-    // 3. Upgrade to STARTTLS if supported and using port 587
+    // 3. Upgrade to STARTTLS whenever the relay advertises it. Certificate
+    // verification stays strict here (unlike opportunistic MX delivery).
     let supports_tls = capabilities.iter().any(|c| c.contains("STARTTLS"));
-    let mut authenticated_stream = if supports_tls && relay_config.port == 587 {
+    let mut authenticated_stream = if supports_tls {
         info!("Relay supports STARTTLS, initiating upgrade...");
         OutboundService::send_cmd(&mut buf_reader, &mut response, "STARTTLS", false).await?;
 
@@ -74,7 +75,9 @@ pub async fn send_via_relay(
 
                     secure_reader
                 }
-                Err(e) => return Err(anyhow::anyhow!("TLS handshake with relay failed: {}", e)),
+                Err(e) => {
+                    return Err(anyhow::anyhow!("TLS handshake with relay failed: {}", e));
+                }
             }
         } else {
             return Err(anyhow::anyhow!(
