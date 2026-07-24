@@ -8,6 +8,7 @@ const LEFT: &[&str] = &[
     "agitated",
     "amazing",
     "angry",
+    "asymmetric",
     "awesome",
     "beautiful",
     "blissful",
@@ -20,12 +21,15 @@ const LEFT: &[&str] = &[
     "cool",
     "compassionate",
     "competent",
+    "concurrent",
     "condescending",
     "confident",
     "cranky",
     "crazy",
+    "cybernetic",
     "dazzling",
     "determined",
+    "deterministic",
     "distracted",
     "dreamy",
     "eager",
@@ -53,6 +57,7 @@ const LEFT: &[&str] = &[
     "heuristic",
     "hopeful",
     "hungry",
+    "immutable",
     "infallible",
     "inspiring",
     "intelligent",
@@ -70,6 +75,7 @@ const LEFT: &[&str] = &[
     "musing",
     "naughty",
     "nervous",
+    "neural",
     "nice",
     "nifty",
     "nostalgic",
@@ -80,9 +86,11 @@ const LEFT: &[&str] = &[
     "pensive",
     "practical",
     "priceless",
+    "quantum",
     "quirky",
     "quizzical",
     "recursing",
+    "recursive",
     "relaxed",
     "reverent",
     "romantic",
@@ -130,7 +138,9 @@ const RIGHT: &[&str] = &[
     "bassi",
     "beaver",
     "bell",
+    "bengio",
     "benz",
+    "bernerslee",
     "bhabha",
     "bhaskara",
     "black",
@@ -208,6 +218,7 @@ const RIGHT: &[&str] = &[
     "haibt",
     "hamilton",
     "haslett",
+    "hassabis",
     "hawking",
     "hellman",
     "heisenberg",
@@ -215,6 +226,7 @@ const RIGHT: &[&str] = &[
     "herschel",
     "hertz",
     "heyrovsky",
+    "hinton",
     "hodgkin",
     "hofstadter",
     "hoover",
@@ -233,6 +245,7 @@ const RIGHT: &[&str] = &[
     "kalam",
     "kapitsa",
     "kare",
+    "karpathy",
     "keldysh",
     "keller",
     "kepler",
@@ -247,6 +260,7 @@ const RIGHT: &[&str] = &[
     "lamport",
     "leakey",
     "leavitt",
+    "lecun",
     "lederberg",
     "lehmann",
     "lewin",
@@ -270,6 +284,7 @@ const RIGHT: &[&str] = &[
     "meninsky",
     "merkle",
     "mestorf",
+    "minsky",
     "mirzakhani",
     "montalcini",
     "moore",
@@ -357,14 +372,90 @@ pub fn generate_name<R: Rng>(rng: &mut R) -> String {
         let left = LEFT.choose(rng).unwrap();
         let right = RIGHT.choose(rng).unwrap();
 
-        // Randomly choose between dot and underscore
-        let sep = if rng.gen_bool(0.5) { "." } else { "_" };
-
-        let name = format!("{}{}{}", left, sep, right);
-
         // Skip boring_wozniak per requirements
-        if name != "boring_wozniak" && name != "boring.wozniak" {
+        if *left == "boring" && *right == "wozniak" {
+            continue;
+        }
+
+        // Randomly choose between dot and hyphen
+        let sep = if rng.gen_bool(0.5) { "." } else { "-" };
+
+        // Generate a random number between 1 and 9999 (inclusive, up to 4 digits, not padded)
+        let num = rng.gen_range(1..10000);
+
+        let name = format!("{}{}{}{}{}", left, sep, right, sep, num);
+
+        // Keep name within subdomain character limit of 32 characters
+        if name.len() <= 32 {
             return name;
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::web::alias_api::validate_alias;
+    use rand::SeedableRng;
+    use rand::rngs::SmallRng;
+
+    #[test]
+    fn test_generate_name_properties() {
+        let mut rng = SmallRng::from_entropy();
+
+        for _ in 0..1000 {
+            let name = generate_name(&mut rng);
+
+            // 1. Must not contain underscores
+            assert!(
+                !name.contains('_'),
+                "Generated name should not contain underscores: {}",
+                name
+            );
+
+            // 2. Length must be <= 32
+            assert!(name.len() <= 32, "Generated name too long: {}", name);
+
+            // 3. Must use the same separator consistently (either '.' or '-')
+            let dot_count = name.chars().filter(|&c| c == '.').count();
+            let hyphen_count = name.chars().filter(|&c| c == '-').count();
+
+            assert!(
+                (dot_count == 2 && hyphen_count == 0) || (dot_count == 0 && hyphen_count == 2),
+                "Generated name must use either '.' or '-' consistently as the separator exactly twice: {}",
+                name
+            );
+
+            // 4. Must end with a number of 1 to 4 digits
+            let parts: Vec<&str> = if dot_count == 2 {
+                name.split('.').collect()
+            } else {
+                name.split('-').collect()
+            };
+
+            assert_eq!(parts.len(), 3, "Name must be split into 3 parts: {}", name);
+            let num_str = parts[2];
+            assert!(
+                !num_str.is_empty() && num_str.len() <= 4,
+                "Number part must be 1 to 4 digits: {}",
+                num_str
+            );
+            let num: u32 = num_str.parse().expect("Third part must be a valid number");
+            assert!((1..=9999).contains(&num));
+
+            // 5. Must not contain the boring wozniak combination
+            assert!(
+                !(parts[0] == "boring" && parts[1] == "wozniak"),
+                "Should not generate boring wozniak combination: {}",
+                name
+            );
+
+            // 6. Must pass the actual alias validation rules
+            assert!(
+                validate_alias(&name, false).is_ok(),
+                "Generated name '{}' failed alias validation",
+                name
+            );
         }
     }
 }
