@@ -51,6 +51,8 @@ async fn test_complete_smtp_to_http_dashboard_lifecycle() {
             tx: tx.clone(),
             outbound: outbound.clone(),
             config: maileroo::config::AppConfig { auto_tls: None },
+            filter_engine: maileroo::filter::FilterEngine::default(),
+            backfill_engine: maileroo::filter::BackfillEngine::default(),
         };
 
         // 4. Spin up real TCP loopback listener on dynamic port 0
@@ -241,6 +243,8 @@ async fn test_incoming_srs_bounce_handling() {
             tx: tx.clone(),
             outbound: outbound.clone(),
             config: maileroo::config::AppConfig { auto_tls: None },
+            filter_engine: maileroo::filter::FilterEngine::default(),
+            backfill_engine: maileroo::filter::BackfillEngine::default(),
         };
 
         // Spin up real TCP loopback listener on dynamic port 0

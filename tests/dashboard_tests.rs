@@ -53,6 +53,8 @@ async fn test_draft_delete_confirmation_page_ok() {
             tx: tokio::sync::broadcast::channel::<DashboardEvent>(100).0,
             outbound,
             config: AppConfig { auto_tls: None },
+            filter_engine: maileroo::filter::FilterEngine::default(),
+            backfill_engine: maileroo::filter::BackfillEngine::default(),
         };
 
         let app_router = create_app(state).await;
@@ -141,6 +143,8 @@ async fn test_email_deletion_and_disk_cleanup_flow() {
             tx: tokio::sync::broadcast::channel::<DashboardEvent>(100).0,
             outbound,
             config: AppConfig { auto_tls: None },
+            filter_engine: maileroo::filter::FilterEngine::default(),
+            backfill_engine: maileroo::filter::BackfillEngine::default(),
         };
 
         let app_router = create_app(state).await;
@@ -294,6 +298,8 @@ async fn test_send_saved_draft_flow_success() {
             tx: tokio::sync::broadcast::channel::<DashboardEvent>(100).0,
             outbound,
             config: AppConfig { auto_tls: None },
+            filter_engine: maileroo::filter::FilterEngine::default(),
+            backfill_engine: maileroo::filter::BackfillEngine::default(),
         };
 
         let app_router = create_app(state).await;
@@ -441,6 +447,8 @@ async fn test_save_draft_lifecycle_flow() {
             tx: tokio::sync::broadcast::channel::<DashboardEvent>(100).0,
             outbound,
             config: AppConfig { auto_tls: None },
+            filter_engine: maileroo::filter::FilterEngine::default(),
+            backfill_engine: maileroo::filter::BackfillEngine::default(),
         };
 
         let app_router = create_app(state).await;
@@ -582,6 +590,8 @@ async fn test_send_already_sent_email_fails_and_prevents_file_deletion() {
             tx: tokio::sync::broadcast::channel::<DashboardEvent>(100).0,
             outbound,
             config: AppConfig { auto_tls: None },
+            filter_engine: maileroo::filter::FilterEngine::default(),
+            backfill_engine: maileroo::filter::BackfillEngine::default(),
         };
 
         let app_router = create_app(state).await;
@@ -690,6 +700,8 @@ async fn test_attachment_deletion_and_security() {
             tx: tokio::sync::broadcast::channel::<maileroo::web::DashboardEvent>(100).0,
             outbound,
             config: maileroo::config::AppConfig { auto_tls: None },
+            filter_engine: maileroo::filter::FilterEngine::default(),
+            backfill_engine: maileroo::filter::BackfillEngine::default(),
         };
 
         let app_router = maileroo::web::create_app(state).await;
@@ -812,6 +824,8 @@ async fn test_attachment_part_index_resolution() {
             tx: tokio::sync::broadcast::channel::<maileroo::web::DashboardEvent>(100).0,
             outbound,
             config: maileroo::config::AppConfig { auto_tls: None },
+            filter_engine: maileroo::filter::FilterEngine::default(),
+            backfill_engine: maileroo::filter::BackfillEngine::default(),
         };
 
         let app_router = maileroo::web::create_app(state).await;
@@ -885,6 +899,8 @@ async fn test_inline_image_e2e_dashboard_render() {
             tx: tokio::sync::broadcast::channel::<maileroo::web::DashboardEvent>(100).0,
             outbound,
             config: maileroo::config::AppConfig { auto_tls: None },
+            filter_engine: maileroo::filter::FilterEngine::default(),
+            backfill_engine: maileroo::filter::BackfillEngine::default(),
         };
 
         let app_router = maileroo::web::create_app(state).await;

@@ -29,6 +29,22 @@
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13"></path>
         </svg>
         {% endif %}
+        {% if !email.labels.is_empty() %}
+        <span class="email-labels-wrapper" style="display: inline-flex; flex-wrap: wrap; gap: 4px; align-items: center; vertical-align: middle; margin-left: 8px; max-width: 260px;">
+            {% for label in email.labels %}
+                {% if loop.index0 < 3 %}
+                <span class="email-label-tag" style="display: inline-flex; align-items: center; font-size: 0.7rem; font-weight: 600; padding: 1px 6px; border-radius: 9999px; background-color: {{ label.color }}1a; color: {{ label.color }}; border: 1px solid {{ label.color }}40; max-width: 100px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
+                    {{ label.name }}
+                </span>
+                {% endif %}
+            {% endfor %}
+            {% if email.labels.len() > 3 %}
+            <span class="email-label-more" style="display: inline-flex; align-items: center; font-size: 0.68rem; font-weight: 600; padding: 1px 5px; border-radius: 9999px; background-color: #edf2f7; color: #718096; border: 1px solid #cbd5e0;">
+                +{{ email.labels.len() - 3 }}
+            </span>
+            {% endif %}
+        </span>
+        {% endif %}
     </td>
     <td id="status-{{ email.id }}" class="forwarded-cell desktop-only">
         {% if email.is_sent_folder %}

@@ -2,6 +2,7 @@ pub mod aliases;
 pub mod api_keys;
 pub mod attachments;
 pub mod domains;
+pub mod labels;
 pub mod queue;
 pub mod replies;
 pub mod reply_mappings;
@@ -19,6 +20,7 @@ pub use domains::{
     Domain, clear_pending_dkim, delete_domain_by_id, get_dkim_key_by_domain, get_domain_by_id,
     get_domain_count, get_domains, insert_domain, promote_pending_dkim, update_pending_dkim,
 };
+pub use labels::*;
 pub use queue::{QueueJob, delete_job, fetch_next_retryable_jobs, insert_job, update_job_status};
 pub use reply_mappings::{
     ReplyMappingLookup, get_or_create_reply_mapping, get_reply_mapping_by_token,
@@ -260,6 +262,7 @@ pub async fn get_email_by_user_id(
     offset: i64,
     alias_address: Option<String>,
     query: Option<String>,
+    label: Option<String>,
 ) -> Result<Vec<ReceivedEmail>, sqlx::Error> {
     match pool {
         DbPool::Postgres(pool) => {
@@ -286,6 +289,11 @@ pub async fn get_email_by_user_id(
                  a.user_id = $1 AND e.thread_id IS NULL
                  AND ($4::TEXT IS NULL OR (a.subdomain || '@' || d.name) = $4)
                  AND ($5::TEXT IS NULL OR e.subject ILIKE '%' || $5 || '%' OR e.sender_email ILIKE '%' || $5 || '%')
+                 AND ($6::TEXT IS NULL OR EXISTS (
+                     SELECT 1 FROM email_labels el
+                     JOIN labels l ON el.label_id = l.id
+                     WHERE el.email_id = e.id AND LOWER(l.name) = LOWER($6)
+                 ))
                  ORDER BY e.last_activity_at DESC
                  LIMIT $2 OFFSET $3"#,
             )
@@ -294,6 +302,7 @@ pub async fn get_email_by_user_id(
             .bind(offset)
             .bind(alias_address)
             .bind(query)
+            .bind(label)
             .fetch_all(pool)
             .await?;
             Ok(emails)
@@ -329,6 +338,10 @@ pub async fn get_email_by_user_id(
                 sql.push_str(" AND (e.subject LIKE ? OR e.sender_email LIKE ?)");
             }
 
+            if label.is_some() {
+                sql.push_str(" AND EXISTS (SELECT 1 FROM email_labels el JOIN labels l ON el.label_id = l.id WHERE el.email_id = e.id AND LOWER(l.name) = LOWER(?))");
+            }
+
             sql.push_str(" ORDER BY e.last_activity_at DESC LIMIT ? OFFSET ?");
 
             let mut q = sqlx::query_as::<sqlx::Sqlite, ReceivedEmail>(&sql).bind(user_id);
@@ -340,6 +353,10 @@ pub async fn get_email_by_user_id(
             if let Some(search) = &query {
                 let pattern = format!("%{}%", search);
                 q = q.bind(pattern.clone()).bind(pattern);
+            }
+
+            if let Some(lbl) = &label {
+                q = q.bind(lbl);
             }
 
             q = q.bind(limit).bind(offset);
@@ -355,6 +372,7 @@ pub async fn get_email_count_by_user_id(
     user_id: uuid::Uuid,
     alias_address: Option<String>,
     query: Option<String>,
+    label: Option<String>,
 ) -> Result<i64, sqlx::Error> {
     match pool {
         DbPool::Postgres(pool) => {
@@ -364,11 +382,17 @@ pub async fn get_email_count_by_user_id(
                    JOIN domains d on d.id = a.domain_id
                    WHERE a.user_id = $1 AND e.thread_id IS NULL
                    AND ($2::TEXT IS NULL OR (a.subdomain || '@' || d.name) = $2)
-                   AND ($3::TEXT IS NULL OR e.subject ILIKE '%' || $3 || '%' OR e.sender_email ILIKE '%' || $3 || '%')"#,
+                   AND ($3::TEXT IS NULL OR e.subject ILIKE '%' || $3 || '%' OR e.sender_email ILIKE '%' || $3 || '%')
+                   AND ($4::TEXT IS NULL OR EXISTS (
+                       SELECT 1 FROM email_labels el
+                       JOIN labels l ON el.label_id = l.id
+                       WHERE el.email_id = e.id AND LOWER(l.name) = LOWER($4)
+                   ))"#,
             )
             .bind(user_id)
             .bind(alias_address)
             .bind(query)
+            .bind(label)
             .fetch_one(pool)
             .await?;
             Ok(count)
@@ -389,6 +413,10 @@ pub async fn get_email_count_by_user_id(
                 sql.push_str(" AND (e.subject LIKE ? OR e.sender_email LIKE ?)");
             }
 
+            if label.is_some() {
+                sql.push_str(" AND EXISTS (SELECT 1 FROM email_labels el JOIN labels l ON el.label_id = l.id WHERE el.email_id = e.id AND LOWER(l.name) = LOWER(?))");
+            }
+
             let mut q = sqlx::query_scalar::<sqlx::Sqlite, i64>(&sql).bind(user_id);
 
             if let Some(alias) = &alias_address {
@@ -398,6 +426,10 @@ pub async fn get_email_count_by_user_id(
             if let Some(search) = &query {
                 let pattern = format!("%{}%", search);
                 q = q.bind(pattern.clone()).bind(pattern);
+            }
+
+            if let Some(lbl) = &label {
+                q = q.bind(lbl);
             }
 
             let count = q.fetch_one(pool).await?;

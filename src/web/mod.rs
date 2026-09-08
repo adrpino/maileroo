@@ -9,6 +9,7 @@ pub mod dkim;
 pub mod email_body;
 pub mod handlers;
 pub mod i18n;
+pub mod labels;
 pub mod names;
 pub mod replies;
 pub mod send_email;
@@ -57,6 +58,8 @@ pub struct AppState {
     pub tx: tokio::sync::broadcast::Sender<DashboardEvent>,
     pub outbound: Arc<crate::outbound::OutboundService>,
     pub config: crate::config::AppConfig,
+    pub filter_engine: crate::filter::FilterEngine,
+    pub backfill_engine: crate::filter::BackfillEngine,
 }
 
 use mail_parser::MessageParser;
@@ -518,7 +521,17 @@ pub async fn create_app(state: AppState) -> Router {
                         .layer(DefaultBodyLimit::max(MAX_UPLOAD_REQUEST_BYTES)),
                 )
                 .route("/emails/{id}/reply", post(api::submit_reply_api))
-                .route("/aliases/{id}/toggle", post(api::toggle_alias_forward_api)),
+                .route("/aliases/{id}/toggle", post(api::toggle_alias_forward_api))
+                .route("/labels/modal", get(labels::get_labels_modal_handler))
+                .route("/labels", post(labels::create_label_handler))
+                .route("/labels/{id}", delete(labels::delete_label_handler))
+                .route("/filters", post(labels::create_filter_handler))
+                .route("/filters/{id}", delete(labels::delete_filter_handler))
+                .route("/emails/{id}/labels", post(labels::add_email_label_handler))
+                .route(
+                    "/emails/{id}/labels/{label_id}",
+                    delete(labels::remove_email_label_handler),
+                ),
         )
         .route("/static/htmx.min.js", get(htmx_js_handler))
         .route("/static/sse.js", get(sse_js_handler))
@@ -689,8 +702,17 @@ async fn get_email(
                         .await
                         .unwrap_or_default();
 
+                    let labels = crate::db::labels::get_labels_for_email(&state.db, email_id)
+                        .await
+                        .unwrap_or_default();
+                    let all_user_labels =
+                        crate::db::labels::get_labels_by_user(&state.db, user.user_id)
+                            .await
+                            .unwrap_or_default();
+
                     EmailDetailTemplate {
                         id: email_id,
+                        email_id,
                         sender,
                         alias_address,
                         subject,
@@ -698,9 +720,12 @@ async fn get_email(
                         date,
                         is_forwarded: email.forwarded,
                         is_outbound: false,
+                        is_sent: false,
                         locale,
                         replies,
                         attachments,
+                        labels,
+                        all_user_labels,
                     }
                     .into_response()
                 }
@@ -745,6 +770,7 @@ async fn get_email(
 
                     EmailDetailTemplate {
                         id: email_id,
+                        email_id,
                         sender,
                         alias_address: recipient,
                         subject,
@@ -752,9 +778,12 @@ async fn get_email(
                         date,
                         is_forwarded: false,
                         is_outbound: true,
+                        is_sent: true,
                         locale,
                         replies: vec![],
                         attachments,
+                        labels: vec![],
+                        all_user_labels: vec![],
                     }
                     .into_response()
                 }

@@ -202,6 +202,35 @@ pub trait Messages {
     fn dkim_verify_button(&self) -> &'static str;
     fn dkim_cancel_button(&self) -> &'static str;
     fn dkim_cancel_confirm(&self) -> &'static str;
+
+    fn manage_filters_and_labels(&self) -> &'static str;
+    fn filter_all_labels(&self) -> &'static str;
+    fn labels_modal_title(&self) -> &'static str;
+    fn tab_filter_rules(&self) -> &'static str;
+    fn tab_manage_labels(&self) -> &'static str;
+    fn create_filter_rule_title(&self) -> &'static str;
+    fn filter_body_contains_label(&self) -> &'static str;
+    fn filter_body_contains_placeholder(&self) -> &'static str;
+    fn filter_apply_label(&self) -> &'static str;
+    fn filter_select_label_placeholder(&self) -> &'static str;
+    fn filter_submit_button(&self) -> &'static str;
+    fn filter_active_rules_title(&self) -> &'static str;
+    fn filter_no_rules(&self) -> &'static str;
+    fn create_label_title(&self) -> &'static str;
+    fn label_name_label(&self) -> &'static str;
+    fn label_name_placeholder(&self) -> &'static str;
+    fn label_color_label(&self) -> &'static str;
+    fn label_submit_button(&self) -> &'static str;
+    fn label_your_labels_title(&self) -> &'static str;
+    fn label_no_labels(&self) -> &'static str;
+    fn delete_filter_button(&self) -> &'static str;
+    fn delete_label_button(&self) -> &'static str;
+    fn add_label_to_email(&self) -> &'static str;
+    fn remove_label_from_email(&self) -> &'static str;
+    fn error_label_name_required(&self) -> &'static str;
+    fn error_filter_keyword_required(&self) -> &'static str;
+    fn filter_apply_to_existing_label(&self) -> &'static str;
+    fn filter_apply_to_existing_tooltip(&self) -> &'static str;
 }
 
 impl Messages for Locale {
@@ -1677,6 +1706,266 @@ impl Messages for Locale {
             }
         }
     }
+
+    fn manage_filters_and_labels(&self) -> &'static str {
+        match self {
+            Locale::En => "Filters & Labels",
+            Locale::Es => "Filtros y Etiquetas",
+            Locale::Fr => "Filtres & Étiquettes",
+            Locale::Pt => "Filtros e Etiquetas",
+        }
+    }
+
+    fn filter_all_labels(&self) -> &'static str {
+        match self {
+            Locale::En => "All",
+            Locale::Es => "Todos",
+            Locale::Fr => "Tous",
+            Locale::Pt => "Todos",
+        }
+    }
+
+    fn labels_modal_title(&self) -> &'static str {
+        match self {
+            Locale::En => "Manage Filters & Labels",
+            Locale::Es => "Administrar Filtros y Etiquetas",
+            Locale::Fr => "Gérer les Filtres et Étiquettes",
+            Locale::Pt => "Gerenciar Filtros e Etiquetas",
+        }
+    }
+
+    fn tab_filter_rules(&self) -> &'static str {
+        match self {
+            Locale::En => "Filter Rules",
+            Locale::Es => "Reglas de Filtrado",
+            Locale::Fr => "Règles de Filtrage",
+            Locale::Pt => "Regras de Filtragem",
+        }
+    }
+
+    fn tab_manage_labels(&self) -> &'static str {
+        match self {
+            Locale::En => "Labels",
+            Locale::Es => "Etiquetas",
+            Locale::Fr => "Étiquettes",
+            Locale::Pt => "Etiquetas",
+        }
+    }
+
+    fn create_filter_rule_title(&self) -> &'static str {
+        match self {
+            Locale::En => "New Filter Rule",
+            Locale::Es => "Nueva Regla de Filtrado",
+            Locale::Fr => "Nouvelle Règle de Filtrage",
+            Locale::Pt => "Nova Regra de Filtragem",
+        }
+    }
+
+    fn filter_body_contains_label(&self) -> &'static str {
+        match self {
+            Locale::En => "If email body contains:",
+            Locale::Es => "Si el cuerpo del correo contiene:",
+            Locale::Fr => "Si le corps de l'e-mail contient :",
+            Locale::Pt => "Se o corpo do e-mail contiver:",
+        }
+    }
+
+    fn filter_body_contains_placeholder(&self) -> &'static str {
+        match self {
+            Locale::En => "e.g. invoice, receipt, urgent",
+            Locale::Es => "ej. factura, recibo, urgente",
+            Locale::Fr => "ex. facture, reçu, urgent",
+            Locale::Pt => "ex. fatura, recibo, urgente",
+        }
+    }
+
+    fn filter_apply_label(&self) -> &'static str {
+        match self {
+            Locale::En => "Apply Label:",
+            Locale::Es => "Aplicar Etiqueta:",
+            Locale::Fr => "Appliquer l'Étiquette :",
+            Locale::Pt => "Aplicar Etiqueta:",
+        }
+    }
+
+    fn filter_select_label_placeholder(&self) -> &'static str {
+        match self {
+            Locale::En => "Select a label...",
+            Locale::Es => "Seleccionar una etiqueta...",
+            Locale::Fr => "Sélectionner une étiquette...",
+            Locale::Pt => "Selecione uma etiqueta...",
+        }
+    }
+
+    fn filter_submit_button(&self) -> &'static str {
+        match self {
+            Locale::En => "Add Filter",
+            Locale::Es => "Agregar Filtro",
+            Locale::Fr => "Ajouter le Filtre",
+            Locale::Pt => "Adicionar Filtro",
+        }
+    }
+
+    fn filter_active_rules_title(&self) -> &'static str {
+        match self {
+            Locale::En => "Active Filter Rules",
+            Locale::Es => "Reglas de Filtrado Activas",
+            Locale::Fr => "Règles de Filtrage Actives",
+            Locale::Pt => "Regras de Filtragem Ativas",
+        }
+    }
+
+    fn filter_no_rules(&self) -> &'static str {
+        match self {
+            Locale::En => "No filter rules created yet.",
+            Locale::Es => "Aún no se han creado reglas de filtrado.",
+            Locale::Fr => "Aucune règle de filtrage créée pour l'instant.",
+            Locale::Pt => "Nenhuma regra de filtragem criada ainda.",
+        }
+    }
+
+    fn create_label_title(&self) -> &'static str {
+        match self {
+            Locale::En => "Create New Label",
+            Locale::Es => "Crear Nueva Etiqueta",
+            Locale::Fr => "Créer une Nouvelle Étiquette",
+            Locale::Pt => "Criar Nova Etiqueta",
+        }
+    }
+
+    fn label_name_label(&self) -> &'static str {
+        match self {
+            Locale::En => "Label Name:",
+            Locale::Es => "Nombre de la Etiqueta:",
+            Locale::Fr => "Nom de l'Étiquette :",
+            Locale::Pt => "Nome da Etiqueta:",
+        }
+    }
+
+    fn label_name_placeholder(&self) -> &'static str {
+        match self {
+            Locale::En => "e.g. Billing, Receipts, Work",
+            Locale::Es => "ej. Facturación, Recibos, Trabajo",
+            Locale::Fr => "ex. Facturation, Reçus, Travail",
+            Locale::Pt => "ex. Cobrança, Recibos, Trabalho",
+        }
+    }
+
+    fn label_color_label(&self) -> &'static str {
+        match self {
+            Locale::En => "Color:",
+            Locale::Es => "Color:",
+            Locale::Fr => "Couleur :",
+            Locale::Pt => "Cor:",
+        }
+    }
+
+    fn label_submit_button(&self) -> &'static str {
+        match self {
+            Locale::En => "Create Label",
+            Locale::Es => "Crear Etiqueta",
+            Locale::Fr => "Créer l'Étiquette",
+            Locale::Pt => "Criar Etiqueta",
+        }
+    }
+
+    fn label_your_labels_title(&self) -> &'static str {
+        match self {
+            Locale::En => "Your Labels",
+            Locale::Es => "Tus Etiquetas",
+            Locale::Fr => "Vos Étiquettes",
+            Locale::Pt => "Suas Etiquetas",
+        }
+    }
+
+    fn label_no_labels(&self) -> &'static str {
+        match self {
+            Locale::En => "No labels created yet.",
+            Locale::Es => "Aún no se han creado etiquetas.",
+            Locale::Fr => "Aucune étiquette créée pour l'instant.",
+            Locale::Pt => "Nenhuma etiqueta criada ainda.",
+        }
+    }
+
+    fn delete_filter_button(&self) -> &'static str {
+        match self {
+            Locale::En => "Delete",
+            Locale::Es => "Eliminar",
+            Locale::Fr => "Supprimer",
+            Locale::Pt => "Excluir",
+        }
+    }
+
+    fn delete_label_button(&self) -> &'static str {
+        match self {
+            Locale::En => "Delete",
+            Locale::Es => "Eliminar",
+            Locale::Fr => "Supprimer",
+            Locale::Pt => "Excluir",
+        }
+    }
+
+    fn add_label_to_email(&self) -> &'static str {
+        match self {
+            Locale::En => "+ Label",
+            Locale::Es => "+ Etiqueta",
+            Locale::Fr => "+ Étiquette",
+            Locale::Pt => "+ Etiqueta",
+        }
+    }
+
+    fn remove_label_from_email(&self) -> &'static str {
+        match self {
+            Locale::En => "Remove label",
+            Locale::Es => "Quitar etiqueta",
+            Locale::Fr => "Retirer l'étiquette",
+            Locale::Pt => "Remover etiqueta",
+        }
+    }
+
+    fn error_label_name_required(&self) -> &'static str {
+        match self {
+            Locale::En => "Label name is required",
+            Locale::Es => "El nombre de la etiqueta es requerido",
+            Locale::Fr => "Le nom de l'étiquette est requis",
+            Locale::Pt => "O nome da etiqueta é obrigatório",
+        }
+    }
+
+    fn error_filter_keyword_required(&self) -> &'static str {
+        match self {
+            Locale::En => "Filter keyword is required",
+            Locale::Es => "La palabra clave del filtro es requerida",
+            Locale::Fr => "Le mot-clé du filtre est requis",
+            Locale::Pt => "A palavra-chave do filtro é obrigatória",
+        }
+    }
+
+    fn filter_apply_to_existing_label(&self) -> &'static str {
+        match self {
+            Locale::En => "Apply to existing emails",
+            Locale::Es => "Aplicar a correos existentes",
+            Locale::Fr => "Appliquer aux e-mails existants",
+            Locale::Pt => "Aplicar aos e-mails existentes",
+        }
+    }
+
+    fn filter_apply_to_existing_tooltip(&self) -> &'static str {
+        match self {
+            Locale::En => {
+                "This will run in the background. Applied labels will appear in your inbox as emails are processed."
+            }
+            Locale::Es => {
+                "Esto se ejecutará en segundo plano. Las etiquetas aparecerán en tu bandeja a medida que se procesen."
+            }
+            Locale::Fr => {
+                "Cela s'exécutera en arrière-plan. Les étiquettes apparaîtront dans votre boîte au fur et à mesure."
+            }
+            Locale::Pt => {
+                "Isto será executado em segundo plano. Os marcadores aparecerão na sua caixa à medida que forem processados."
+            }
+        }
+    }
 }
 #[cfg(test)]
 mod tests {
@@ -1739,6 +2028,10 @@ mod tests {
             assert!(!locale.login_title().is_empty());
             assert!(!locale.modal_cancel().is_empty());
             assert!(!locale.modal_delete_confirm().is_empty());
+            assert!(!locale.manage_filters_and_labels().is_empty());
+            assert!(!locale.labels_modal_title().is_empty());
+            assert!(!locale.filter_apply_to_existing_label().is_empty());
+            assert!(!locale.filter_apply_to_existing_tooltip().is_empty());
 
             // Parameterized messages
             let alias_msg = locale.delete_alias_message("test@alias.com");
