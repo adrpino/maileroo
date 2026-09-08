@@ -1,4 +1,6 @@
+use crate::db::labels::assign_labels_to_email;
 use crate::db::{ReplyMappingLookup, get_or_create_reply_mapping, get_reply_mapping_by_token};
+use crate::filter::FilterEngine;
 use crate::fs::write_file_sync_with_permissions;
 use crate::inbound::acceptor::HotReloadAcceptor;
 use crate::inbound::parser::{AttachmentMetadata, EmailMetadata, extract_full_metadata};
@@ -243,6 +245,7 @@ pub struct SmtpSession {
     rate_limiter: Arc<crate::inbound::rate_limit::RateLimiter>,
     blocklist: Arc<crate::inbound::blocklist::Blocklist>,
     limits: crate::inbound::rate_limit::InboundLimits,
+    filter_engine: FilterEngine,
 }
 
 impl SmtpSession {
@@ -298,7 +301,13 @@ impl SmtpSession {
             rate_limiter,
             blocklist,
             limits,
+            filter_engine: FilterEngine::default(),
         }
+    }
+
+    pub fn with_filter_engine(mut self, filter_engine: FilterEngine) -> Self {
+        self.filter_engine = filter_engine;
+        self
     }
     async fn write_line(&mut self, msg: &str) -> Result<(), std::io::Error> {
         let out = format!("{}\r\n", msg);
@@ -601,6 +610,20 @@ impl SmtpSession {
             .await
             {
                 Ok(email) => {
+                    // Evaluate filter rules against email body and assign matching labels
+                    let raw_bytes = self.body_buffer.get_content_bytes().unwrap_or_default();
+                    if let Ok(matched_label_ids) = self
+                        .filter_engine
+                        .evaluate(&self.db_pool, email.user_id, &raw_bytes)
+                        .await
+                    {
+                        if !matched_label_ids.is_empty() {
+                            let _ =
+                                assign_labels_to_email(&self.db_pool, email.id, &matched_label_ids)
+                                    .await;
+                        }
+                    }
+
                     // Send notification to SSE subscribers
                     let _ = self.tx.send(crate::web::DashboardEvent::NewEmail {
                         user_id: email.user_id,

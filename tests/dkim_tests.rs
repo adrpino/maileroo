@@ -42,6 +42,8 @@ async fn test_dkim_rotation_e2e_flow() {
             tx: tokio::sync::broadcast::channel::<DashboardEvent>(100).0,
             outbound,
             config: AppConfig { auto_tls: None },
+            filter_engine: maileroo::filter::FilterEngine::default(),
+            backfill_engine: maileroo::filter::BackfillEngine::default(),
         };
 
         let app_router = create_app(state).await;

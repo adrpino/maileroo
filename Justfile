@@ -4,13 +4,9 @@ default: help
 help:
 	@just --list
 
-# Initialize and fix the local environment (.env file)
+# Initialize the local environment (.env file)
 init-env:
 	@if [ ! -f .env ]; then cp .env.example .env; echo "Created .env from .env.example"; fi
-	@sed -i 's|^DATABASE_URL=.*|DATABASE_URL=postgres://postgres:mysecret@localhost:54322/maily|' .env
-	@sed -i 's|^SECURE_COOKIES=.*|SECURE_COOKIES=false|' .env
-	@sed -i 's|^COOKIE_DOMAIN=.*|COOKIE_DOMAIN=|' .env
-	@echo "✅ Local .env configured for HTTP/localhost (no secure cookies, no domain restriction)."
 
 # Start the local database (Postgres)
 db-up:

@@ -166,6 +166,15 @@ impl MailerooServer {
         );
 
         let (tx, _) = tokio::sync::broadcast::channel::<web::DashboardEvent>(100);
+        let filter_engine = crate::filter::FilterEngine::new();
+        let (backfill_engine, backfill_rx) = crate::filter::BackfillEngine::new();
+
+        crate::filter::BackfillEngine::start_worker(
+            backfill_engine.active_tenants(),
+            db_pool.clone(),
+            storage_dir.clone(),
+            backfill_rx,
+        );
 
         let web_state = web::AppState {
             db: db_pool.clone(),
@@ -174,6 +183,8 @@ impl MailerooServer {
             tx,
             outbound: outbound.clone(),
             config: app_config,
+            filter_engine,
+            backfill_engine,
         };
 
         println!("Starting services...");
@@ -242,6 +253,7 @@ impl MailerooServer {
             self.state.outbound.clone(),
             self.tls_acceptor.clone(),
             self.state.tx.clone(),
+            self.state.filter_engine.clone(),
         );
 
         let web_server = async move {

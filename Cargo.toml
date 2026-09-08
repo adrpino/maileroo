@@ -1,6 +1,6 @@
 [package]
 name = "maileroo"
-version = "0.2.4"
+version = "0.2.5"
 edition = "2024"
 default-run = "maileroo"
 repository = "https://github.com/adrpino/maileroo"
@@ -58,6 +58,7 @@ async-stream = "0.3.5"
 futures-util = "0.3"
 argon2 = "0.5.3"
 regex = "1.12.3"
+aho-corasick = "1.1"
 tower-sessions = "0.14.0"
 tower-sessions-sqlx-store = { version = "0.15.0", features = ["postgres", "sqlite"] }
 askama = "0.15.4"

@@ -34,3 +34,39 @@ This document specifies foundational conventions and guidelines that all LLM age
 
 - **English Only**: All inline comments, code documentation, and git commit messages must be written strictly in professional English.
 - **No Emojis/No Clutter**: Commit messages must be written in a professional manner, excluding emojis or conversational filler.
+
+## 7. Frontend Internationalization (i18n)
+
+- **Mandatory Translation**: All user-facing frontend UI strings (labels, buttons, modal titles, tooltips, error messages, notifications) must be integrated into the existing internationalization system in `src/web/i18n.rs`.
+- **Four Locales Supported**: Every message key added to the `Messages` trait must be translated across all four supported locales: English (`Locale::En`), Spanish (`Locale::Es`), French (`Locale::Fr`), and Portuguese (`Locale::Pt`).
+- **No Hardcoded English in Templates**: Never hardcode user-facing text strings directly in Askama templates (`templates/*.html`). Always reference them via `{{ locale.your_message_key() }}`.
+
+## 8. Pre-Commit Verification Workflow
+
+Before committing any changeset or submitting code, you must run the following checks in order, matching the project CI pipeline (`.github/workflows/ci.yml`):
+
+1. **Formatting Check**:
+   ```bash
+   cargo fmt --all -- --check
+   ```
+   If formatting fails, run `cargo fmt --all` to automatically resolve formatting issues.
+
+2. **Clippy Linter**:
+   ```bash
+   cargo clippy --all-targets
+   ```
+   Ensure no regressions or compiler warnings are introduced.
+
+3. **Multi-Database Test Suite**:
+   Start the local dev database (`just db-up`) and run the test suite with `TEST_DATABASE_URL` configured so tests execute against both SQLite and PostgreSQL:
+   ```bash
+   TEST_DATABASE_URL="postgres://postgres:mysecret@localhost:54322/maily" cargo test
+   ```
+
+4. **End-to-End Test Suite**:
+   When routes, templates, or email lifecycles are modified, run the automated E2E test runner:
+   ```bash
+   just e2e-test
+   ```
+
+

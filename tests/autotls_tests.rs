@@ -47,6 +47,8 @@ async fn test_e2e_auto_tls_certificate_negotiation() {
             tx,
             outbound,
             config: AppConfig { auto_tls: Some(auto_tls) },
+            filter_engine: maileroo::filter::FilterEngine::default(),
+            backfill_engine: maileroo::filter::BackfillEngine::default(),
         };
 
         // 3. Start the Web Server in a background task
@@ -128,6 +130,8 @@ async fn test_auto_tls_redirection_flow() {
             config: AppConfig {
                 auto_tls: Some(auto_tls),
             },
+            filter_engine: maileroo::filter::FilterEngine::default(),
+            backfill_engine: maileroo::filter::BackfillEngine::default(),
         };
 
         // 3. Start the Web Server in a background task

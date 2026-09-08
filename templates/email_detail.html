@@ -289,6 +289,14 @@
                 </span>
                 {% endif %}
             </div>
+            {% if !is_sent %}
+            <div class="meta-item" style="display: flex; align-items: flex-start; gap: 8px; margin-top: 6px;">
+                <span class="meta-label" style="margin-top: 4px;">{{ locale.tab_manage_labels() }}:</span>
+                <div style="flex: 1;">
+                    {% include "email_labels_partial.html" %}
+                </div>
+            </div>
+            {% endif %}
         </div>
     </div>
 

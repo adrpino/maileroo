@@ -26,6 +26,7 @@ pub struct PaginationParams {
     pub alias: Option<String>,
     pub q: Option<String>,
     pub folder: Option<String>,
+    pub label: Option<String>,
 }
 
 pub struct DisplayEmail {
@@ -38,6 +39,7 @@ pub struct DisplayEmail {
     pub is_viewed: bool,
     pub status: Option<crate::db::sent_emails::EmailStatus>,
     pub has_attachments: bool,
+    pub labels: Vec<crate::db::labels::Label>,
 }
 
 #[derive(Template)]
@@ -45,7 +47,9 @@ pub struct DisplayEmail {
 pub struct DashboardTemplate {
     pub emails: Vec<DisplayEmail>,
     pub user_aliases: Vec<crate::db::Alias>,
+    pub user_labels: Vec<crate::db::labels::Label>,
     pub current_alias: Option<String>,
+    pub current_label: Option<String>,
     pub query: Option<String>,
     pub current_folder: String,
     pub alias_count: i64,
@@ -82,6 +86,7 @@ pub async fn dashboard_handler(
     let offset = (page - 1) * page_size;
     let alias_filter = pagination.alias.filter(|s| !s.is_empty());
     let query_filter = pagination.q.filter(|s| !s.is_empty());
+    let label_filter = pagination.label.filter(|s| !s.is_empty());
     let current_folder = pagination.folder.unwrap_or_else(|| "inbox".to_string());
 
     let (emails, total_emails) = if current_folder == "sent" || current_folder == "drafts" {
@@ -125,6 +130,7 @@ pub async fn dashboard_handler(
                 is_viewed: true,
                 status: Some(email.status),
                 has_attachments: email.has_attachments,
+                labels: Vec::new(),
             })
             .collect();
 
@@ -137,6 +143,7 @@ pub async fn dashboard_handler(
             offset,
             alias_filter.clone(),
             query_filter.clone(),
+            label_filter.clone(),
         )
         .await
         {
@@ -152,6 +159,7 @@ pub async fn dashboard_handler(
             user.user_id,
             alias_filter.clone(),
             query_filter.clone(),
+            label_filter.clone(),
         )
         .await
         {
@@ -159,18 +167,27 @@ pub async fn dashboard_handler(
             Err(_) => 0,
         };
 
+        let email_ids: Vec<uuid::Uuid> = inbox_emails.iter().map(|e| e.id).collect();
+        let mut labels_map = crate::db::labels::get_labels_for_emails(&state.db, &email_ids)
+            .await
+            .unwrap_or_default();
+
         let display_emails = inbox_emails
             .into_iter()
-            .map(|email| DisplayEmail {
-                id: email.id,
-                alias_address: email.alias_address.unwrap_or_default(),
-                correspondent_email: email.sender_email,
-                subject: email.subject,
-                date: email.received_at,
-                is_sent_folder: false,
-                is_viewed: email.viewed,
-                status: None,
-                has_attachments: email.has_attachments,
+            .map(|email| {
+                let labels = labels_map.remove(&email.id).unwrap_or_default();
+                DisplayEmail {
+                    id: email.id,
+                    alias_address: email.alias_address.unwrap_or_default(),
+                    correspondent_email: email.sender_email,
+                    subject: email.subject,
+                    date: email.received_at,
+                    is_sent_folder: false,
+                    is_viewed: email.viewed,
+                    status: None,
+                    has_attachments: email.has_attachments,
+                    labels,
+                }
             })
             .collect();
 
@@ -183,6 +200,10 @@ pub async fn dashboard_handler(
         Ok(aliases) => aliases,
         Err(_) => vec![],
     };
+
+    let user_labels = crate::db::labels::get_labels_by_user(&state.db, user.user_id)
+        .await
+        .unwrap_or_default();
 
     let alias_count = user_aliases.len() as i64;
 
@@ -199,7 +220,9 @@ pub async fn dashboard_handler(
         DashboardTemplate {
             emails,
             user_aliases,
+            user_labels,
             current_alias: alias_filter,
+            current_label: label_filter,
             query: query_filter,
             current_folder,
             alias_count,
@@ -392,6 +415,7 @@ pub async fn delete_email_confirm_handler(
 #[template(path = "email_detail.html")]
 pub struct EmailDetailTemplate {
     pub id: uuid::Uuid,
+    pub email_id: uuid::Uuid,
     pub sender: String,
     pub alias_address: String,
     pub subject: String,
@@ -399,9 +423,12 @@ pub struct EmailDetailTemplate {
     pub date: String,
     pub is_forwarded: bool,
     pub is_outbound: bool,
+    pub is_sent: bool,
     pub locale: Locale,
     pub replies: Vec<ThreadMessage>,
     pub attachments: Vec<crate::db::attachments::AttachmentRow>,
+    pub labels: Vec<crate::db::labels::Label>,
+    pub all_user_labels: Vec<crate::db::labels::Label>,
 }
 
 impl IntoResponse for EmailDetailTemplate {
@@ -432,6 +459,9 @@ pub async fn dashboard_sse_handler(
             match rx.recv().await {
                 Ok(DashboardEvent::NewEmail { user_id, email_id }) if user_id == user.user_id => {
                     if let Ok(Some(email)) = get_email_by_id(&state.db, email_id, user.user_id).await {
+                        let labels = crate::db::labels::get_labels_for_email(&state.db, email_id)
+                            .await
+                            .unwrap_or_default();
                         let display_email = DisplayEmail {
                             id: email.id,
                             alias_address: email.alias_address.unwrap_or_default(),
@@ -442,6 +472,7 @@ pub async fn dashboard_sse_handler(
                             is_viewed: email.viewed,
                             status: None,
                             has_attachments: email.has_attachments,
+                            labels,
                         };
                         let template = crate::web::handlers::EmailRowTemplate { email: display_email, locale: locale.clone() };
                         if let Ok(html) = askama::Template::render(&template) {
@@ -648,6 +679,7 @@ mod tests {
             is_viewed: false,
             status: None,
             has_attachments: false,
+            labels: Vec::new(),
         };
 
         let template = crate::web::handlers::EmailRowTemplate {
@@ -658,6 +690,74 @@ mod tests {
         let rendered = askama::Template::render(&template).unwrap();
         assert!(rendered.contains("test@example.com"));
         assert!(rendered.contains("Hello Test"));
+    }
+
+    #[test]
+    fn test_email_row_anti_overflow_labels() {
+        let user_id = Uuid::new_v4();
+        let labels = vec![
+            crate::db::labels::Label {
+                id: Uuid::new_v4(),
+                user_id,
+                name: "Billing".to_string(),
+                color: "#3182ce".to_string(),
+                created_at: OffsetDateTime::now_utc(),
+            },
+            crate::db::labels::Label {
+                id: Uuid::new_v4(),
+                user_id,
+                name: "Receipts".to_string(),
+                color: "#38a169".to_string(),
+                created_at: OffsetDateTime::now_utc(),
+            },
+            crate::db::labels::Label {
+                id: Uuid::new_v4(),
+                user_id,
+                name: "Important".to_string(),
+                color: "#e53e3e".to_string(),
+                created_at: OffsetDateTime::now_utc(),
+            },
+            crate::db::labels::Label {
+                id: Uuid::new_v4(),
+                user_id,
+                name: "Extra Tag 4".to_string(),
+                color: "#805ad5".to_string(),
+                created_at: OffsetDateTime::now_utc(),
+            },
+            crate::db::labels::Label {
+                id: Uuid::new_v4(),
+                user_id,
+                name: "Extra Tag 5".to_string(),
+                color: "#dd6b20".to_string(),
+                created_at: OffsetDateTime::now_utc(),
+            },
+        ];
+
+        let display_email = DisplayEmail {
+            id: Uuid::new_v4(),
+            alias_address: "alias@example.com".to_string(),
+            correspondent_email: "test@example.com".to_string(),
+            subject: "Overflow Protection Test".to_string(),
+            date: OffsetDateTime::now_utc(),
+            is_sent_folder: false,
+            is_viewed: false,
+            status: None,
+            has_attachments: false,
+            labels,
+        };
+
+        let template = crate::web::handlers::EmailRowTemplate {
+            email: display_email,
+            locale: Locale::En,
+        };
+
+        let rendered = askama::Template::render(&template).unwrap();
+        assert!(rendered.contains("Billing"));
+        assert!(rendered.contains("Receipts"));
+        assert!(rendered.contains("Important"));
+        assert!(!rendered.contains("Extra Tag 4"));
+        assert!(!rendered.contains("Extra Tag 5"));
+        assert!(rendered.contains("+2"));
     }
 
     #[test]
@@ -693,6 +793,7 @@ mod tests {
             is_viewed: true,
             status: Some(sent_row.status.clone()),
             has_attachments: false,
+            labels: Vec::new(),
         };
 
         assert_eq!(display_email.is_sent_folder, true);
@@ -703,8 +804,10 @@ mod tests {
 
     #[test]
     fn test_email_detail_template_outbound_flag() {
+        let email_id = Uuid::new_v4();
         let template = EmailDetailTemplate {
-            id: Uuid::new_v4(),
+            id: email_id,
+            email_id,
             sender: "alias@domain.com".to_string(),
             alias_address: "recipient@other.com".to_string(),
             subject: "Test".to_string(),
@@ -712,9 +815,12 @@ mod tests {
             date: "2023-01-01".to_string(),
             is_forwarded: false,
             is_outbound: true,
+            is_sent: true,
             locale: Locale::En,
             replies: vec![],
             attachments: vec![],
+            labels: vec![],
+            all_user_labels: vec![],
         };
 
         assert!(template.is_outbound);

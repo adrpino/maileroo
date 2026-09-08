@@ -439,7 +439,8 @@
 <div id="dashboard-center">
     <div class="welcome-header">
         <h1>{{ locale.dashboard_title() }}</h1>
-        <div style="display: flex; gap: 10px; align-items: center;">
+        <div style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap;">
+            <button class="btn" style="background-color: #4a5568; color: white;" hx-get="/api/v1/labels/modal" hx-target="#maileroo-modal-placeholder">{{ locale.manage_filters_and_labels() }}</button>
             {% if can_send_firsthand || is_admin %}
             <button class="btn" style="background-color: #38a169; color: white;" hx-get="/api/v1/emails/compose" hx-target="#maileroo-modal-placeholder">{{ locale.compose_button() }}</button>
             {% endif %}
@@ -475,13 +476,33 @@
         </div>
     </div>
 
-    <div class="emails-controls-container" style="margin-bottom: 20px; display: flex; gap: 15px; border-bottom: 1px solid #e2e8f0; padding-bottom: 10px;">
+    <div class="emails-controls-container" style="margin-bottom: 15px; display: flex; gap: 15px; border-bottom: 1px solid #e2e8f0; padding-bottom: 10px;">
         <a href="/dashboard?folder=inbox" class="{% if current_folder == "inbox" %}active-tab{% else %}inactive-tab{% endif %}" style="text-decoration: none; font-weight: 600; padding-bottom: 8px;">{{ locale.folder_inbox() }}</a>
         {% if can_send_firsthand || is_admin %}
         <a href="/dashboard?folder=sent" class="{% if current_folder == "sent" %}active-tab{% else %}inactive-tab{% endif %}" style="text-decoration: none; font-weight: 600; padding-bottom: 8px;">{{ locale.folder_sent() }}</a>
         <a href="/dashboard?folder=drafts" class="{% if current_folder == "drafts" %}active-tab{% else %}inactive-tab{% endif %}" style="text-decoration: none; font-weight: 600; padding-bottom: 8px;">{{ locale.folder_drafts() }}</a>
         {% endif %}
     </div>
+
+    {% if current_folder == "inbox" && !user_labels.is_empty() %}
+    <div class="label-filter-strip" style="display: flex; gap: 8px; align-items: center; overflow-x: auto; -webkit-overflow-scrolling: touch; padding: 2px 0 12px 0; margin-bottom: 8px;">
+        {% set query_param = query.as_deref().unwrap_or("") %}
+        {% set alias_param = current_alias.as_deref().unwrap_or("") %}
+
+        <a href="/dashboard?folder=inbox&q={{ query_param }}&alias={{ alias_param }}" 
+           style="text-decoration: none; font-size: 0.8rem; font-weight: 600; padding: 3px 12px; border-radius: 9999px; white-space: nowrap; flex-shrink: 0; {% if current_label.is_none() %}background-color: #2b6cb0; color: white;{% else %}background-color: #edf2f7; color: #4a5568; border: 1px solid #e2e8f0;{% endif %}">
+            {{ locale.filter_all_labels() }}
+        </a>
+
+        {% for label in user_labels %}
+        <a href="/dashboard?folder=inbox&label={{ label.name }}&q={{ query_param }}&alias={{ alias_param }}"
+           style="text-decoration: none; font-size: 0.8rem; font-weight: 600; padding: 3px 12px; border-radius: 9999px; white-space: nowrap; flex-shrink: 0; max-width: 150px; overflow: hidden; text-overflow: ellipsis; display: inline-flex; align-items: center; gap: 6px; {% if current_label.as_deref() == Some(label.name.as_str()) %}background-color: {{ label.color }}; color: white;{% else %}background-color: {{ label.color }}1a; color: {{ label.color }}; border: 1px solid {{ label.color }}40;{% endif %}">
+            <span style="display: inline-block; width: 8px; height: 8px; border-radius: 50%; background-color: {% if current_label.as_deref() == Some(label.name.as_str()) %}white{% else %}{{ label.color }}{% endif %}; flex-shrink: 0;"></span>
+            <span style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">{{ label.name }}</span>
+        </a>
+        {% endfor %}
+    </div>
+    {% endif %}
 
     <h2 class="section-title emails-header-container">
         <div>
@@ -499,6 +520,7 @@
                 hx-trigger="change delay:500ms"
                 style="margin: 0; display: flex; gap: 8px; flex-grow: 1; justify-content: flex-end; align-items: center;">
                 <input type="hidden" name="folder" value="{{ current_folder }}">
+                <input type="hidden" name="label" value="{{ current_label.as_deref().unwrap_or("") }}">
                 <input type="search" name="q" value="{{ query.as_deref().unwrap_or("") }}"
                     placeholder="{{ locale.search_placeholder() }}" class="search-input"
                     hx-trigger="input changed delay:500ms, search" hx-get="/dashboard" hx-target="body"
@@ -576,8 +598,9 @@
     <div class="pagination">
         {% set query_param = query.as_deref().unwrap_or("") %}
         {% set alias_param = current_alias.as_deref().unwrap_or("") %}
+        {% set label_param = current_label.as_deref().unwrap_or("") %}
 
-        <a href="/dashboard?page={{ current_page - 1 }}&folder={{ current_folder }}&q={{ query_param }}&alias={{ alias_param }}"
+        <a href="/dashboard?page={{ current_page - 1 }}&folder={{ current_folder }}&q={{ query_param }}&alias={{ alias_param }}&label={{ label_param }}"
             class="btn-pagination {% if current_page <= 1 %}disabled{% endif %}">
             &larr; {{ locale.pagination_previous() }}
         </a>
@@ -586,7 +609,7 @@
             {{ locale.pagination_info(current_page, total_pages) }}
         </span>
 
-        <a href="/dashboard?page={{ current_page + 1 }}&folder={{ current_folder }}&q={{ query_param }}&alias={{ alias_param }}"
+        <a href="/dashboard?page={{ current_page + 1 }}&folder={{ current_folder }}&q={{ query_param }}&alias={{ alias_param }}&label={{ label_param }}"
             class="btn-pagination {% if current_page >= total_pages %}disabled{% endif %}">
             {{ locale.pagination_next() }} &rarr;
         </a>

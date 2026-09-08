@@ -118,6 +118,7 @@ pub struct PaginationParams {
 #[template(path = "email_detail.html")]
 pub struct EmailDetailTemplate {
     pub id: uuid::Uuid,
+    pub email_id: uuid::Uuid,
     pub sender: String,
     pub alias_address: String,
     pub subject: String,
@@ -125,9 +126,12 @@ pub struct EmailDetailTemplate {
     pub date: String,
     pub is_forwarded: bool,
     pub is_outbound: bool,
+    pub is_sent: bool,
     pub locale: Locale,
     pub replies: Vec<ThreadMessage>,
     pub attachments: Vec<AttachmentRow>,
+    pub labels: Vec<crate::db::labels::Label>,
+    pub all_user_labels: Vec<crate::db::labels::Label>,
 }
 impl IntoResponse for EmailDetailTemplate {
     fn into_response(self) -> Response {

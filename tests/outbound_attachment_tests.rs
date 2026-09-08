@@ -84,6 +84,8 @@ async fn test_outbound_attachments_happy_path() {
             tx: tokio::sync::broadcast::channel::<DashboardEvent>(100).0,
             outbound,
             config: AppConfig { auto_tls: None },
+            filter_engine: maileroo::filter::FilterEngine::default(),
+            backfill_engine: maileroo::filter::BackfillEngine::default(),
         };
 
         let app_router = create_app(state).await;
@@ -273,6 +275,8 @@ async fn test_outbound_attachments_limits_validation() {
             tx: tokio::sync::broadcast::channel::<DashboardEvent>(100).0,
             outbound,
             config: AppConfig { auto_tls: None },
+            filter_engine: maileroo::filter::FilterEngine::default(),
+            backfill_engine: maileroo::filter::BackfillEngine::default(),
         };
 
         let app_router = create_app(state).await;
@@ -350,6 +354,8 @@ async fn test_outbound_attachments_deletion_cleanup() {
             tx: tokio::sync::broadcast::channel::<DashboardEvent>(100).0,
             outbound,
             config: AppConfig { auto_tls: None },
+            filter_engine: maileroo::filter::FilterEngine::default(),
+            backfill_engine: maileroo::filter::BackfillEngine::default(),
         };
 
         let app_router = create_app(state).await;

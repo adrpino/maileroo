@@ -21,6 +21,7 @@ pub async fn run_server(
     outbound: Arc<OutboundService>,
     acceptor: Option<HotReloadAcceptor>,
     tx: tokio::sync::broadcast::Sender<crate::web::DashboardEvent>,
+    filter_engine: crate::filter::FilterEngine,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let listener = TcpListener::bind(addr).await?;
     println!("SMTP server listening on {}", &addr);
@@ -62,6 +63,7 @@ pub async fn run_server(
         let rate_limiter_clone = rate_limiter.clone();
         let blocklist_clone = blocklist.clone();
         let limits_clone = limits;
+        let filter_engine_clone = filter_engine.clone();
 
         tokio::spawn(async move {
             let mut session = SmtpSession::new(
@@ -75,7 +77,8 @@ pub async fn run_server(
                 rate_limiter_clone,
                 blocklist_clone,
                 limits_clone,
-            );
+            )
+            .with_filter_engine(filter_engine_clone);
             if let Err(e) = session.handle().await {
                 eprintln!("SMTP error from {}: {}", peer_ip, e)
             }

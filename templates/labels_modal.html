@@ -1,0 +1,175 @@
+<div id="maileroo-modal" class="maileroo-modal-backdrop" onclick="if(event.target == this) this.remove()">
+    <div class="maileroo-modal-content" style="max-width: 680px; width: 95%;">
+        <div class="maileroo-modal-header">
+            <h3>🏷️ {{ locale.labels_modal_title() }}</h3>
+            <button class="maileroo-modal-close" onclick="document.getElementById('maileroo-modal').remove()">
+                <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+            </button>
+        </div>
+
+        <div class="maileroo-modal-body" style="padding: 20px;">
+            {% if let Some(err) = error %}
+            <div style="background: #fff5f5; border: 1px solid #fed7d7; padding: 10px 14px; border-radius: 6px; color: #c53030; font-size: 0.9rem; margin-bottom: 15px;">
+                ⚠️ {{ err }}
+            </div>
+            {% endif %}
+
+            <!-- Tab Navigation -->
+            <div style="display: flex; gap: 10px; border-bottom: 2px solid #edf2f7; margin-bottom: 20px;">
+                <button type="button" 
+                        hx-get="/api/v1/labels/modal?tab=filters" 
+                        hx-target="#maileroo-modal-placeholder"
+                        style="background: none; border: none; padding: 8px 16px; font-size: 0.95rem; font-weight: 600; cursor: pointer; border-bottom: 3px solid {% if active_tab == "filters" %}#3182ce{% else %}transparent{% endif %}; color: {% if active_tab == "filters" %}#3182ce{% else %}#718096{% endif %};">
+                    {{ locale.tab_filter_rules() }}
+                </button>
+                <button type="button" 
+                        hx-get="/api/v1/labels/modal?tab=labels" 
+                        hx-target="#maileroo-modal-placeholder"
+                        style="background: none; border: none; padding: 8px 16px; font-size: 0.95rem; font-weight: 600; cursor: pointer; border-bottom: 3px solid {% if active_tab == "labels" %}#3182ce{% else %}transparent{% endif %}; color: {% if active_tab == "labels" %}#3182ce{% else %}#718096{% endif %};">
+                    {{ locale.tab_manage_labels() }}
+                </button>
+            </div>
+
+            {% if active_tab == "filters" %}
+                <!-- FILTER RULES TAB -->
+                <div style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 16px; margin-bottom: 25px;">
+                    <h4 style="margin: 0 0 12px 0; font-size: 1rem; color: #2d3748;">{{ locale.create_filter_rule_title() }}</h4>
+                    {% if labels.is_empty() %}
+                        <p style="margin: 0 0 10px 0; color: #718096; font-size: 0.9rem;">
+                            {{ locale.label_no_labels() }}
+                        </p>
+                        <button type="button" class="btn" style="background-color: #3182ce; color: white; font-size: 0.85rem;"
+                                hx-get="/api/v1/labels/modal?tab=labels" hx-target="#maileroo-modal-placeholder">
+                            {{ locale.create_label_title() }}
+                        </button>
+                    {% else %}
+                        <form hx-post="/api/v1/filters" hx-target="#maileroo-modal-placeholder" style="margin: 0; display: flex; flex-direction: column; gap: 12px;">
+                            <div>
+                                <label style="display: block; font-size: 0.85rem; font-weight: 600; color: #4a5568; margin-bottom: 4px;">
+                                    {{ locale.filter_body_contains_label() }}
+                                </label>
+                                <input type="text" name="keyword" required placeholder="{{ locale.filter_body_contains_placeholder() }}" 
+                                       style="width: 100%; box-sizing: border-box; padding: 8px 12px; border: 1px solid #cbd5e0; border-radius: 6px; font-size: 0.9rem;">
+                            </div>
+                            <div style="display: flex; gap: 10px; align-items: flex-end; flex-wrap: wrap;">
+                                <div style="flex: 1; min-width: 180px;">
+                                    <label style="display: block; font-size: 0.85rem; font-weight: 600; color: #4a5568; margin-bottom: 4px;">
+                                        {{ locale.filter_apply_label() }}
+                                    </label>
+                                    <select name="label_id" required style="width: 100%; box-sizing: border-box; padding: 8px 12px; border: 1px solid #cbd5e0; border-radius: 6px; font-size: 0.9rem; background: white;">
+                                        {% for label in labels %}
+                                        <option value="{{ label.id }}">{{ label.name }}</option>
+                                        {% endfor %}
+                                    </select>
+                                </div>
+                                <button type="submit" class="btn" style="background-color: #3182ce; color: white; padding: 8px 18px; font-weight: 600; white-space: nowrap;">
+                                    {{ locale.filter_submit_button() }}
+                                </button>
+                            </div>
+                            <div style="display: flex; align-items: center; gap: 8px; margin-top: 4px;">
+                                <input type="checkbox" id="apply_to_existing" name="apply_to_existing" value="true" style="cursor: pointer; width: 16px; height: 16px;">
+                                <label for="apply_to_existing" style="font-size: 0.85rem; color: #4a5568; cursor: pointer; user-select: none;">
+                                    {{ locale.filter_apply_to_existing_label() }}
+                                </label>
+                                <span class="maileroo-tooltip-container">
+                                    <span class="maileroo-tooltip-icon">?</span>
+                                    <span class="maileroo-tooltip-text">{{ locale.filter_apply_to_existing_tooltip() }}</span>
+                                </span>
+                            </div>
+                        </form>
+                    {% endif %}
+                </div>
+
+                <h4 style="margin: 0 0 12px 0; font-size: 1rem; color: #2d3748;">{{ locale.filter_active_rules_title() }}</h4>
+                {% if filters.is_empty() %}
+                    <p style="color: #a0aec0; font-size: 0.9rem; margin: 0; font-style: italic;">
+                        {{ locale.filter_no_rules() }}
+                    </p>
+                {% else %}
+                    <div style="display: flex; flex-direction: column; gap: 8px; max-height: 250px; overflow-y: auto;">
+                        {% for filter in filters %}
+                        <div style="display: flex; justify-content: space-between; align-items: center; padding: 10px 14px; background: white; border: 1px solid #edf2f7; border-radius: 6px; gap: 10px;">
+                            <div style="display: flex; align-items: center; gap: 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1;">
+                                <span style="font-size: 0.85rem; color: #4a5568; overflow: hidden; text-overflow: ellipsis;">
+                                    &ldquo;<strong>{{ filter.keyword }}</strong>&rdquo; &rarr;
+                                </span>
+                                <span style="display: inline-flex; align-items: center; font-size: 0.75rem; font-weight: 600; padding: 2px 8px; border-radius: 9999px; background-color: {{ filter.label_color }}1a; color: {{ filter.label_color }}; border: 1px solid {{ filter.label_color }}40; max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
+                                    {{ filter.label_name }}
+                                </span>
+                            </div>
+                            <button type="button" class="btn btn-delete" style="padding: 4px 10px; font-size: 0.8rem; margin: 0;"
+                                    hx-delete="/api/v1/filters/{{ filter.id }}" hx-target="#maileroo-modal-placeholder">
+                                {{ locale.delete_filter_button() }}
+                            </button>
+                        </div>
+                        {% endfor %}
+                    </div>
+                {% endif %}
+
+            {% else %}
+                <!-- LABELS TAB -->
+                <div style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 16px; margin-bottom: 25px;">
+                    <h4 style="margin: 0 0 12px 0; font-size: 1rem; color: #2d3748;">{{ locale.create_label_title() }}</h4>
+                    <form hx-post="/api/v1/labels" hx-target="#maileroo-modal-placeholder" style="margin: 0; display: flex; flex-direction: column; gap: 12px;">
+                        <div>
+                            <label style="display: block; font-size: 0.85rem; font-weight: 600; color: #4a5568; margin-bottom: 4px;">
+                                {{ locale.label_name_label() }}
+                            </label>
+                            <input type="text" name="name" required placeholder="{{ locale.label_name_placeholder() }}" 
+                                   style="width: 100%; box-sizing: border-box; padding: 8px 12px; border: 1px solid #cbd5e0; border-radius: 6px; font-size: 0.9rem;">
+                        </div>
+                        <div>
+                            <label style="display: block; font-size: 0.85rem; font-weight: 600; color: #4a5568; margin-bottom: 6px;">
+                                {{ locale.label_color_label() }}
+                            </label>
+                            <div style="display: flex; gap: 8px; flex-wrap: wrap; align-items: center;">
+                                {% set colors = ["#3182ce", "#38a169", "#d69e2e", "#e53e3e", "#805ad5", "#dd6b20", "#319795", "#718096"] %}
+                                {% for c in colors %}
+                                <label style="cursor: pointer; display: inline-flex; align-items: center;">
+                                    <input type="radio" name="color" value="{{ c }}" {% if loop.first %}checked{% endif %} style="display: none;" class="color-swatch-radio">
+                                    <span class="color-swatch-circle" style="display: inline-block; width: 24px; height: 24px; border-radius: 50%; background-color: {{ c }}; border: 2px solid white; box-shadow: 0 0 0 1px #cbd5e0; transition: transform 0.15s;"></span>
+                                </label>
+                                {% endfor %}
+                            </div>
+                        </div>
+                        <div style="text-align: right; margin-top: 5px;">
+                            <button type="submit" class="btn" style="background-color: #3182ce; color: white; padding: 8px 18px; font-weight: 600;">
+                                {{ locale.label_submit_button() }}
+                            </button>
+                        </div>
+                    </form>
+                </div>
+
+                <h4 style="margin: 0 0 12px 0; font-size: 1rem; color: #2d3748;">{{ locale.label_your_labels_title() }}</h4>
+                {% if labels.is_empty() %}
+                    <p style="color: #a0aec0; font-size: 0.9rem; margin: 0; font-style: italic;">
+                        {{ locale.label_no_labels() }}
+                    </p>
+                {% else %}
+                    <div style="display: flex; flex-direction: column; gap: 8px; max-height: 250px; overflow-y: auto;">
+                        {% for label in labels %}
+                        <div style="display: flex; justify-content: space-between; align-items: center; padding: 10px 14px; background: white; border: 1px solid #edf2f7; border-radius: 6px;">
+                            <div style="display: flex; align-items: center; gap: 8px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
+                                <span style="display: inline-block; width: 12px; height: 12px; border-radius: 50%; background-color: {{ label.color }}; flex-shrink: 0;"></span>
+                                <span style="font-weight: 600; font-size: 0.9rem; color: #2d3748; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
+                                    {{ label.name }}
+                                </span>
+                            </div>
+                            <button type="button" class="btn btn-delete" style="padding: 4px 10px; font-size: 0.8rem; margin: 0;"
+                                    hx-delete="/api/v1/labels/{{ label.id }}" hx-target="#maileroo-modal-placeholder">
+                                {{ locale.delete_label_button() }}
+                            </button>
+                        </div>
+                        {% endfor %}
+                    </div>
+                {% endif %}
+            {% endif %}
+        </div>
+
+        <div class="maileroo-modal-footer" style="padding: 12px 20px; border-top: 1px solid #edf2f7; text-align: right;">
+            <button class="maileroo-btn" onclick="document.getElementById('maileroo-modal').remove();">
+                {{ locale.modal_cancel() }}
+            </button>
+        </div>
+    </div>
+</div>
