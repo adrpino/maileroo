@@ -407,15 +407,43 @@
             text-overflow: ellipsis;
         }
 
-        /* Subject cell */
+        /* Subject cell.
+           Laid out as a wrapping flex row so the label pills drop onto their own
+           line instead of being clipped off the end of the truncated subject. */
         td:nth-child(3) {
             grid-area: subject;
             padding: 0;
             font-size: 0.9rem;
             color: #718096;
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            gap: 4px;
+            min-width: 0;
+            white-space: normal;
+            overflow: hidden;
+        }
+
+        /* The subject itself still truncates to a single line. */
+        .subject-text {
+            flex: 1 1 auto;
+            min-width: 0;
             white-space: nowrap;
             overflow: hidden;
             text-overflow: ellipsis;
+        }
+
+        /* Attachment icon must not be squeezed by the subject. */
+        td:nth-child(3)>svg {
+            flex-shrink: 0;
+        }
+
+        /* Labels always take a full-width line beneath the subject. The inline
+           styles on the wrapper need overriding here. */
+        .email-labels-wrapper {
+            flex: 0 0 100%;
+            margin-left: 0 !important;
+            max-width: 100% !important;
         }
 
         /* Date cell - Show on mobile */
@@ -432,6 +460,22 @@
         td:nth-child(4),
         td:nth-child(6) {
             display: none;
+        }
+
+        /* The empty-state placeholder is a single full-width cell, not a data row.
+           Without this it inherits the row grid and lands in the 36px checkbox
+           column, which squashes the message into a narrow strip. */
+        tr#no-emails-placeholder {
+            display: block;
+            padding: 0;
+        }
+
+        tr#no-emails-placeholder td {
+            display: block;
+            grid-area: auto;
+            width: 100%;
+            padding: 48px 24px;
+            text-align: center;
         }
     }
 </style>
