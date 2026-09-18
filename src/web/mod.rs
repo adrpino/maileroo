@@ -13,6 +13,7 @@ pub mod labels;
 pub mod names;
 pub mod replies;
 pub mod send_email;
+pub mod session;
 
 use crate::db::DbPool;
 use axum::extract::{DefaultBodyLimit, FromRequestParts, State};
@@ -176,6 +177,29 @@ pub fn validate_csrf_token(
     }
 }
 
+/// Pure function that explains *why* a CSRF check failed, for logging.
+///
+/// The distinction matters operationally: a missing session token means the session
+/// was created by a flow that never issued one, which no amount of client-side retry
+/// will fix, whereas a missing header usually means the cookie never reached the client.
+pub fn csrf_failure_reason(header_present: bool, session_present: bool) -> &'static str {
+    match (header_present, session_present) {
+        (false, false) => {
+            "no token in session and none sent by client; session was created without \
+             a CSRF token (e.g. registration) - user must log in again"
+        }
+        (true, false) => {
+            "session holds no CSRF token; session was created without one or has been \
+             cleared - user must log in again"
+        }
+        (false, true) => {
+            "client sent no X-CSRF-Token header; csrf_token cookie missing, blocked, or \
+             scripts did not run"
+        }
+        (true, true) => "token mismatch; stale cookie from a previous session",
+    }
+}
+
 impl<S> FromRequestParts<S> for AuthenticatedUser
 where
     Arc<AppState>: FromRef<S>,
@@ -200,7 +224,27 @@ where
             .get("X-CSRF-Token")
             .and_then(|h| h.to_str().ok());
         let session_token: Option<String> = session.get("csrf_token").await.unwrap_or(None);
-        validate_csrf_token(&parts.method, header_token, session_token.as_deref())?;
+        if let Err(err) = validate_csrf_token(&parts.method, header_token, session_token.as_deref())
+        {
+            let user_agent = parts
+                .headers
+                .get(axum::http::header::USER_AGENT)
+                .and_then(|h| h.to_str().ok())
+                .unwrap_or("<none>");
+
+            tracing::warn!(
+                user_id = %user_id,
+                method = %parts.method,
+                path = %parts.uri.path(),
+                header_token_present = header_token.is_some(),
+                session_token_present = session_token.is_some(),
+                user_agent = %user_agent,
+                "403 CSRF verification failed: {}",
+                csrf_failure_reason(header_token.is_some(), session_token.is_some())
+            );
+
+            return Err(err);
+        }
 
         // 1. Try to get user flags from session (Caching)
         let is_admin = session
@@ -274,6 +318,12 @@ where
         if auth.is_admin {
             Ok(AdminUser(auth))
         } else {
+            tracing::warn!(
+                user_id = %auth.user_id,
+                method = %parts.method,
+                path = %parts.uri.path(),
+                "403 admin access required"
+            );
             Err(AuthError::Forbidden)
         }
     }
@@ -293,6 +343,12 @@ where
         if auth.can_send_firsthand || auth.is_admin {
             Ok(FirsthandSenderUser(auth))
         } else {
+            tracing::warn!(
+                user_id = %auth.user_id,
+                method = %parts.method,
+                path = %parts.uri.path(),
+                "403 firsthand sending not permitted for this user"
+            );
             Err(AuthError::Forbidden)
         }
     }
@@ -329,7 +385,7 @@ async fn crawler_filter(
 
     if forbidden.iter().any(|pattern| path.contains(pattern)) {
         // Silently block without running any other app logic
-        tracing::warn!("Blocked crawler attempt: {}", path);
+        tracing::warn!("403 blocked crawler attempt: {}", path);
         return Err(axum::http::StatusCode::FORBIDDEN);
     }
 
@@ -1003,6 +1059,19 @@ mod tests {
         // Safe Methods shouldn't care about tokens
         assert!(validate_csrf_token(&p_get, None, None).is_ok());
         assert!(validate_csrf_token(&p_get, Some("a"), Some("b")).is_ok());
+    }
+
+    #[test]
+    fn test_csrf_failure_reason_distinguishes_causes() {
+        // Session never had a token: the client cannot fix this by retrying.
+        assert!(csrf_failure_reason(false, false).contains("must log in again"));
+        assert!(csrf_failure_reason(true, false).contains("must log in again"));
+
+        // Session has a token but the client did not send one back.
+        assert!(csrf_failure_reason(false, true).contains("X-CSRF-Token"));
+
+        // Both present means they simply did not match.
+        assert!(csrf_failure_reason(true, true).contains("mismatch"));
     }
 
     #[test]

@@ -7,6 +7,7 @@ use crate::disposable_domains::is_disposable;
 use crate::web::ThreadMessage;
 use crate::web::auth::{hash_password, verify_password};
 use crate::web::i18n::{Locale, Messages};
+use crate::web::session::{csrf_clear_cookie_header, csrf_cookie_header, establish_session};
 use crate::web::{AdminUser, AppState, AuthenticatedUser, extract_domain};
 use axum::body::Body;
 use axum::extract::{Path, State};
@@ -52,14 +53,7 @@ fn is_valid_email(email: &str) -> bool {
 pub async fn logout_handler(session: Session) -> Response {
     let _ = session.clear().await;
 
-    let cookie_domain = crate::config::get_config("COOKIE_DOMAIN", "");
-    let mut cookie = String::from("csrf_token=; Path=/; SameSite=Lax; Max-Age=0");
-    if !cookie_domain.is_empty() {
-        cookie.push_str(&format!("; Domain={}", cookie_domain));
-    }
-    if crate::config::get_config("SECURE_COOKIES", "true") == "true" {
-        cookie.push_str("; Secure");
-    }
+    let cookie = csrf_clear_cookie_header();
 
     Response::builder()
         .status(StatusCode::OK)
@@ -188,18 +182,7 @@ pub async fn login_handler(
     };
 
     if verify_password(&payload.password, &user.password_hash) {
-        let _ = session.insert("user_id", user.id).await;
-        let _ = session.insert("is_admin", user.is_admin).await;
-        let _ = session
-            .insert("bypass_alias_limit", user.bypass_alias_limit)
-            .await;
-        let _ = session
-            .insert("can_send_firsthand", user.can_send_firsthand)
-            .await;
-        let _ = session.insert("user_data_loaded", true).await;
-
-        let csrf_token = Uuid::new_v4().to_string();
-        let _ = session.insert("csrf_token", &csrf_token).await;
+        let csrf_token = establish_session(&session, &user).await;
 
         let client_ip = crate::web::extract_client_ip(&headers, &extensions);
         let _ = update_last_login(&state.db, user.id, Some(client_ip)).await;
@@ -210,22 +193,10 @@ pub async fn login_handler(
             .body(Body::empty())
             .unwrap();
 
-        let cookie_domain = crate::config::get_config("COOKIE_DOMAIN", "");
-        let mut cookie = format!(
-            "csrf_token={}; Path=/; SameSite=Lax; Max-Age={}",
-            csrf_token,
-            crate::web::SESSION_MAX_AGE_SECONDS
+        response.headers_mut().insert(
+            axum::http::header::SET_COOKIE,
+            csrf_cookie_header(&csrf_token).parse().unwrap(),
         );
-        if !cookie_domain.is_empty() {
-            cookie.push_str(&format!("; Domain={}", cookie_domain));
-        }
-        if crate::config::get_config("SECURE_COOKIES", "true") == "true" {
-            cookie.push_str("; Secure");
-        }
-
-        response
-            .headers_mut()
-            .insert(axum::http::header::SET_COOKIE, cookie.parse().unwrap());
 
         return response;
     }
@@ -283,17 +254,20 @@ pub async fn register_handler(
     let hash = hash_password(&payload.password).unwrap();
     match insert_user(&state.db, &payload.email, &hash).await {
         Ok(user) => {
-            let _ = session.insert("user_id", user.id).await;
-            let _ = session.insert("is_admin", user.is_admin).await;
-            let _ = session
-                .insert("bypass_alias_limit", user.bypass_alias_limit)
-                .await;
-            let _ = session.insert("user_data_loaded", true).await;
-            Response::builder()
+            let csrf_token = establish_session(&session, &user).await;
+
+            let mut response = Response::builder()
                 .header("HX-Redirect", "/dashboard")
                 .status(StatusCode::OK)
                 .body(Body::empty())
-                .unwrap()
+                .unwrap();
+
+            response.headers_mut().insert(
+                axum::http::header::SET_COOKIE,
+                csrf_cookie_header(&csrf_token).parse().unwrap(),
+            );
+
+            response
         }
         Err(_) => RegisterTemplate {
             error: Some(locale.error_email_taken().to_string()),

@@ -267,3 +267,47 @@ pub async fn grant_user_sender_permissions(db: &DbPool, user_id: Uuid) {
         }
     }
 }
+
+/// Builds a fully wired `Router` for HTTP-level tests, backed by `db`.
+///
+/// Mirrors the production wiring in `create_app`, so extractors, the session layer
+/// and CSRF enforcement all behave exactly as they do at runtime.
+pub async fn build_test_app(db: &DbPool, storage_dir: std::path::PathBuf) -> axum::Router {
+    init_crypto_provider();
+
+    let resolver = hickory_resolver::TokioResolver::builder_tokio()
+        .unwrap()
+        .build()
+        .unwrap();
+    let dns_scanner = maileroo::dns::DnsScanner::new(resolver.clone());
+    let outbound = std::sync::Arc::new(maileroo::outbound::OutboundService::new(
+        "srs_secret_key_123".to_string(),
+        resolver,
+        "example.com".to_string(),
+        db.clone(),
+        storage_dir.clone(),
+    ));
+
+    let state = maileroo::web::AppState {
+        db: db.clone(),
+        storage_dir,
+        dns_scanner,
+        tx: tokio::sync::broadcast::channel::<maileroo::web::DashboardEvent>(100).0,
+        outbound,
+        config: maileroo::config::AppConfig { auto_tls: None },
+        filter_engine: maileroo::filter::FilterEngine::default(),
+        backfill_engine: maileroo::filter::BackfillEngine::default(),
+    };
+
+    maileroo::web::create_app(state).await
+}
+
+/// Collects every `Set-Cookie` value on a response into a single `Cookie` header string.
+pub fn collect_cookies<B>(res: &axum::http::Response<B>) -> String {
+    res.headers()
+        .get_all(axum::http::header::SET_COOKIE)
+        .iter()
+        .map(|v| v.to_str().unwrap().split(';').next().unwrap().to_string())
+        .collect::<Vec<_>>()
+        .join("; ")
+}
