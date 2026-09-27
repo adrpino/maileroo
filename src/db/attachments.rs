@@ -340,3 +340,96 @@ pub async fn delete_attachments_for_email(
         }
     }
 }
+
+/// Metadata row for an attachment that belongs to a reply instead of an
+/// inbound or outbound email. `email_id` still holds the parent received
+/// email id so the existing NOT NULL constraint keeps holding.
+#[derive(sqlx::FromRow, serde::Serialize, Debug, Clone)]
+pub struct ReplyAttachmentRow {
+    pub id: Uuid,
+    pub reply_id: Uuid,
+    pub filename: Option<String>,
+    pub content_type: Option<String>,
+    pub size_bytes: i64,
+    pub part_index: i32,
+    pub created_at: OffsetDateTime,
+}
+
+#[allow(clippy::too_many_arguments)]
+pub async fn insert_reply_attachment(
+    pool: &DbPool,
+    id: Uuid,
+    email_id: Uuid,
+    reply_id: Uuid,
+    filename: Option<&str>,
+    content_type: Option<&str>,
+    size_bytes: i64,
+    part_index: i32,
+) -> Result<(), sqlx::Error> {
+    match pool {
+        DbPool::Postgres(pool) => {
+            sqlx::query(
+                r#"INSERT INTO attachments (
+                    id, email_id, filename, content_type, size_bytes, part_index, is_inline, content_id, created_at, reply_id
+                ) VALUES ($1, $2, $3, $4, $5, $6, false, NULL, NOW(), $7)"#,
+            )
+            .bind(id)
+            .bind(email_id)
+            .bind(filename)
+            .bind(content_type)
+            .bind(size_bytes)
+            .bind(part_index)
+            .bind(reply_id)
+            .execute(pool)
+            .await?;
+            Ok(())
+        }
+        DbPool::Sqlite(pool) => {
+            sqlx::query(
+                r#"INSERT INTO attachments (
+                    id, email_id, filename, content_type, size_bytes, part_index, is_inline, content_id, created_at, reply_id
+                ) VALUES (?, ?, ?, ?, ?, ?, false, NULL, CURRENT_TIMESTAMP, ?)"#,
+            )
+            .bind(id)
+            .bind(email_id)
+            .bind(filename)
+            .bind(content_type)
+            .bind(size_bytes)
+            .bind(part_index)
+            .bind(reply_id)
+            .execute(pool)
+            .await?;
+            Ok(())
+        }
+    }
+}
+
+pub async fn get_attachments_for_reply(
+    pool: &DbPool,
+    reply_id: Uuid,
+) -> Result<Vec<ReplyAttachmentRow>, sqlx::Error> {
+    match pool {
+        DbPool::Postgres(pool) => {
+            sqlx::query_as::<_, ReplyAttachmentRow>(
+                r#"SELECT id, reply_id, filename, content_type, size_bytes, part_index, created_at
+                   FROM attachments
+                   WHERE reply_id = $1
+                   ORDER BY part_index ASC"#,
+            )
+            .bind(reply_id)
+            .fetch_all(pool)
+            .await
+        }
+        DbPool::Sqlite(pool) => {
+            sqlx::query_as::<sqlx::Sqlite, ReplyAttachmentRow>(
+                r#"SELECT id, reply_id, filename, content_type, size_bytes, part_index, created_at
+                   FROM attachments
+                   WHERE reply_id = ?
+                   ORDER BY part_index ASC"#,
+            )
+            .bind(reply_id)
+            .fetch_all(pool)
+            .await
+        }
+    }
+}

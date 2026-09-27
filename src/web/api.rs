@@ -83,8 +83,8 @@ pub async fn submit_reply_api(
     Path(email_id): Path<Uuid>,
     Json(payload): Json<ReplyRequest>,
 ) -> impl IntoResponse {
-    match process_reply(&state, user.user.id, email_id, &payload.body_text).await {
-        Ok(reply) => Json(json!({
+    match process_reply(&state, user.user.id, email_id, &payload.body_text, vec![]).await {
+        Ok((reply, _attachments)) => Json(json!({
             "status": "success",
             "reply": reply
         }))

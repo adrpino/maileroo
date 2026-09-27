@@ -357,11 +357,17 @@
         <div class="reply-form-container">
             <h3>{{ locale.reply_form_title() }}</h3>
             <form hx-post="/emails/{{ id }}/reply" hx-target="#replies-list" hx-swap="beforeend"
+                hx-encoding="multipart/form-data"
                 hx-on::after-request="if(event.detail.successful) this.reset()">
                 <textarea name="body_text" required class="reply-textarea"
                     placeholder="{{ locale.reply_placeholder() }}"></textarea>
+                <label for="reply-attachments" class="reply-attachments-label">
+                    {{ locale.reply_attachments_label() }}
+                </label>
+                <input type="file" id="reply-attachments" name="attachments" multiple
+                    style="margin-bottom: 10px; font-size: 0.9em;">
                 <div style="display: flex; justify-content: flex-end;">
-                    <button type="submit" class="btn-reply-send">
+                    <button type="submit" class="btn-reply-send" hx-params="*">
                         {{ locale.send_reply_button() }}
                     </button>
                 </div>

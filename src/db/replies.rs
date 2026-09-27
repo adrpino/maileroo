@@ -9,6 +9,7 @@ pub struct EmailReply {
     pub body_text: String,
     pub sent_at: OffsetDateTime,
     pub message_id: Option<String>,
+    pub body_key: Option<Uuid>,
 }
 
 pub async fn insert_reply(
@@ -16,6 +17,7 @@ pub async fn insert_reply(
     email_id: Uuid,
     body_text: &str,
     message_id: Option<String>,
+    body_key: Option<Uuid>,
 ) -> Result<EmailReply, sqlx::Error> {
     let now = OffsetDateTime::now_utc();
 
@@ -29,14 +31,16 @@ pub async fn insert_reply(
                 .await?;
 
             sqlx::query_as::<_, EmailReply>(
-                r#"INSERT INTO email_replies (id, email_id, body_text, sent_at, message_id)
-                   VALUES ($1, $2, $3, $4, $5) RETURNING id, email_id, body_text, sent_at, message_id"#,
+                r#"INSERT INTO email_replies (id, email_id, body_text, sent_at, message_id, body_key)
+                   VALUES ($1, $2, $3, $4, $5, $6)
+                   RETURNING id, email_id, body_text, sent_at, message_id, body_key"#,
             )
             .bind(Uuid::new_v4())
             .bind(email_id)
             .bind(body_text)
             .bind(now)
             .bind(message_id)
+            .bind(body_key)
             .fetch_one(pool)
             .await
         }
@@ -50,16 +54,41 @@ pub async fn insert_reply(
 
             let id = Uuid::new_v4();
             sqlx::query_as::<sqlx::Sqlite, EmailReply>(
-                r#"INSERT INTO email_replies (id, email_id, body_text, sent_at, message_id)
-                   VALUES (?, ?, ?, ?, ?) 
-                   RETURNING id, email_id, body_text, sent_at, message_id"#,
+                r#"INSERT INTO email_replies (id, email_id, body_text, sent_at, message_id, body_key)
+                   VALUES (?, ?, ?, ?, ?, ?)
+                   RETURNING id, email_id, body_text, sent_at, message_id, body_key"#,
             )
             .bind(id)
             .bind(email_id)
             .bind(body_text)
             .bind(now)
             .bind(message_id)
+            .bind(body_key)
             .fetch_one(pool)
+            .await
+        }
+    }
+}
+
+pub async fn get_reply_by_id(
+    pool: &DbPool,
+    reply_id: Uuid,
+) -> Result<Option<EmailReply>, sqlx::Error> {
+    match pool {
+        DbPool::Postgres(pool) => {
+            sqlx::query_as::<_, EmailReply>(
+                "SELECT id, email_id, body_text, sent_at, message_id, body_key FROM email_replies WHERE id = $1",
+            )
+            .bind(reply_id)
+            .fetch_optional(pool)
+            .await
+        }
+        DbPool::Sqlite(pool) => {
+            sqlx::query_as::<sqlx::Sqlite, EmailReply>(
+                "SELECT id, email_id, body_text, sent_at, message_id, body_key FROM email_replies WHERE id = ?",
+            )
+            .bind(reply_id)
+            .fetch_optional(pool)
             .await
         }
     }
@@ -72,7 +101,7 @@ pub async fn get_replies_for_email(
     match pool {
         DbPool::Postgres(pool) => {
             sqlx::query_as::<_, EmailReply>(
-                "SELECT id, email_id, body_text, sent_at, message_id FROM email_replies WHERE email_id = $1 ORDER BY sent_at ASC",
+                "SELECT id, email_id, body_text, sent_at, message_id, body_key FROM email_replies WHERE email_id = $1 ORDER BY sent_at ASC",
             )
             .bind(email_id)
             .fetch_all(pool)
@@ -80,7 +109,7 @@ pub async fn get_replies_for_email(
         }
         DbPool::Sqlite(pool) => {
             sqlx::query_as::<sqlx::Sqlite, EmailReply>(
-                "SELECT id, email_id, body_text, sent_at, message_id FROM email_replies WHERE email_id = ? ORDER BY sent_at ASC",
+                "SELECT id, email_id, body_text, sent_at, message_id, body_key FROM email_replies WHERE email_id = ? ORDER BY sent_at ASC",
             )
             .bind(email_id)
             .fetch_all(pool)
