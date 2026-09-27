@@ -828,4 +828,89 @@ mod tests {
         // The reply container should be hidden when is_outbound is true
         assert!(!rendered.contains("id=\"replies-container\""));
     }
+
+    // Regression test for inline attachments not being listed: non-image parts
+    // embedded with a content_id (e.g. inline PDFs) must appear in the
+    // attachments list, while inline images (already rendered in the body via
+    // CID substitution) must not be duplicated there.
+    #[test]
+    fn test_email_detail_lists_inline_non_image_attachments() {
+        let email_id = Uuid::new_v4();
+        let attachments = vec![
+            crate::db::attachments::AttachmentRow {
+                id: Uuid::new_v4(),
+                email_id,
+                filename: Some("regular.pdf".to_string()),
+                content_type: Some("application/pdf".to_string()),
+                size_bytes: 2048,
+                part_index: 0,
+                is_inline: false,
+                content_id: None,
+                created_at: OffsetDateTime::now_utc(),
+            },
+            crate::db::attachments::AttachmentRow {
+                id: Uuid::new_v4(),
+                email_id,
+                filename: Some("embedded-doc.pdf".to_string()),
+                content_type: Some("application/pdf".to_string()),
+                size_bytes: 4096,
+                part_index: 1,
+                is_inline: true,
+                content_id: Some("f_muh4zyby0".to_string()),
+                created_at: OffsetDateTime::now_utc(),
+            },
+            crate::db::attachments::AttachmentRow {
+                id: Uuid::new_v4(),
+                email_id,
+                filename: Some("logo.png".to_string()),
+                content_type: Some("image/png".to_string()),
+                size_bytes: 512,
+                part_index: 2,
+                is_inline: true,
+                content_id: Some("img-logo".to_string()),
+                created_at: OffsetDateTime::now_utc(),
+            },
+        ];
+
+        let template = EmailDetailTemplate {
+            id: email_id,
+            email_id,
+            sender: "sender@example.com".to_string(),
+            alias_address: "alias@example.com".to_string(),
+            subject: "Attachment Listing Test".to_string(),
+            body: "Body".to_string(),
+            date: "2026-09-25".to_string(),
+            is_forwarded: false,
+            is_outbound: false,
+            is_sent: false,
+            locale: Locale::En,
+            replies: vec![],
+            attachments,
+            labels: vec![],
+            all_user_labels: vec![],
+        };
+
+        let rendered = template.render().unwrap();
+
+        // Regular and inline non-image attachments must be listed with download links.
+        assert!(
+            rendered.contains("regular.pdf"),
+            "Regular attachment must be listed"
+        );
+        assert!(
+            rendered.contains("embedded-doc.pdf"),
+            "Inline non-image attachment (PDF with content_id) must be listed"
+        );
+
+        // Inline images are already rendered in the body and must not be duplicated.
+        let logo_links = rendered.matches("/attachment/").count();
+        assert_eq!(
+            logo_links, 2,
+            "Only the regular and inline PDF attachments should have download links"
+        );
+        assert!(
+            !rendered.contains("logo.png"),
+            "Inline image must not be listed as an attachment"
+        );
+    }
 }
