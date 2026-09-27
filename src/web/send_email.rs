@@ -3,7 +3,8 @@ use crate::db::sent_emails::{
 };
 use crate::db::{DbPool, get_alias_by_id_and_user};
 use crate::fs::write_file_async_with_permissions;
-use crate::outbound::mime::{Attachment, MimeEmail, build_mime, sanitize_header};
+use crate::outbound::mime::{MimeEmail, build_mime};
+use crate::web::attachments_form::read_multipart_fields;
 use crate::web::i18n::{Locale, Messages};
 use crate::web::{AppState, FirsthandSenderUser};
 use askama::Template;
@@ -16,9 +17,6 @@ use serde::Deserialize;
 use std::sync::Arc;
 use uuid::Uuid;
 
-pub const MAX_ATTACHMENTS: usize = 10;
-pub const MAX_ATTACHMENT_BYTES: usize = 10 * 1024 * 1024; // 10 MB
-pub const MAX_TOTAL_ATTACHMENT_BYTES: usize = 25 * 1024 * 1024; // 25 MB
 pub const MAX_UPLOAD_REQUEST_BYTES: usize = 30 * 1024 * 1024; // 30 MB
 
 #[derive(Template)]
@@ -131,133 +129,33 @@ pub async fn submit_email_handler(
     locale: Locale,
     user: FirsthandSenderUser,
     State(state): State<Arc<AppState>>,
-    mut multipart: Multipart,
+    multipart: Multipart,
 ) -> impl IntoResponse {
     let auth_user = user.0;
 
-    let mut draft_id: Option<Uuid> = None;
-    let mut from_alias_id: Option<Uuid> = None;
-    let mut to_email_str = String::new();
-    let mut subject_str = String::new();
-    let mut body_text_str = String::new();
-    let mut attachments: Vec<Attachment> = Vec::new();
-    let mut total_attachment_bytes = 0usize;
-
-    while let Ok(Some(mut field)) = multipart.next_field().await {
-        let name = match field.name() {
-            Some(name) => name.to_string(),
-            None => continue,
-        };
-
-        if name == "attachments" {
-            let filename = field.file_name().map(sanitize_header);
-            let content_type = field.content_type().map(sanitize_header);
-
-            let mut data = Vec::new();
-            while let Ok(Some(chunk)) = field.chunk().await {
-                if data.len() + chunk.len() > MAX_ATTACHMENT_BYTES {
-                    return ToastTemplate {
-                        message: format!(
-                            "Attachment exceeds maximum limit of {} MB.",
-                            MAX_ATTACHMENT_BYTES / 1024 / 1024
-                        ),
-                        success: false,
-                    }
-                    .into_response();
-                }
-                data.extend_from_slice(&chunk);
-            }
-
-            if data.is_empty() {
-                continue;
-            }
-
-            if attachments.len() >= MAX_ATTACHMENTS {
-                return ToastTemplate {
-                    message: format!("Too many attachments. Maximum is {}.", MAX_ATTACHMENTS),
-                    success: false,
-                }
-                .into_response();
-            }
-
-            total_attachment_bytes += data.len();
-            if total_attachment_bytes > MAX_TOTAL_ATTACHMENT_BYTES {
-                return ToastTemplate {
-                    message: format!(
-                        "Total attachments size exceeds limit of {} MB.",
-                        MAX_TOTAL_ATTACHMENT_BYTES / 1024 / 1024
-                    ),
-                    success: false,
-                }
-                .into_response();
-            }
-
-            let resolved_content_type = match content_type {
-                Some(ref ct) if !ct.trim().is_empty() => ct.clone(),
-                _ => {
-                    if let Some(ref fname) = filename {
-                        mime_guess::from_path(fname)
-                            .first_raw()
-                            .unwrap_or("application/octet-stream")
-                            .to_string()
-                    } else {
-                        "application/octet-stream".to_string()
-                    }
-                }
-            };
-
-            let final_filename = match filename {
-                Some(f) => {
-                    let cleaned = f.replace(['/', '\\'], "").trim().to_string();
-                    if cleaned.is_empty() {
-                        Some("attachment".to_string())
-                    } else {
-                        Some(cleaned)
-                    }
-                }
-                None => Some("attachment".to_string()),
-            };
-
-            attachments.push(Attachment {
-                filename: final_filename,
-                content_type: resolved_content_type,
-                data,
-                is_inline: false,
-                content_id: None,
-            });
-        } else {
-            let value = match field.text().await {
-                Ok(val) => val,
-                Err(e) => {
-                    tracing::error!("Failed to read field {}: {}", name, e);
-                    continue;
-                }
-            };
-
-            match name.as_str() {
-                "draft_id" => {
-                    if let Ok(id) = Uuid::parse_str(value.trim()) {
-                        draft_id = Some(id);
-                    }
-                }
-                "from_alias_id" => {
-                    if let Ok(id) = Uuid::parse_str(value.trim()) {
-                        from_alias_id = Some(id);
-                    }
-                }
-                "to_email" => {
-                    to_email_str = value;
-                }
-                "subject" => {
-                    subject_str = value;
-                }
-                "body_text" => {
-                    body_text_str = value;
-                }
-                _ => {}
-            }
+    let fields = read_multipart_fields(multipart).await;
+    if let Some((_, message)) = fields.error {
+        // HTMX toast contract: limit violations surface as a 200 toast so the
+        // UI renders the error message instead of a bare status page.
+        return ToastTemplate {
+            message,
+            success: false,
         }
+        .into_response();
     }
+
+    let draft_id: Option<Uuid> = fields
+        .text
+        .get("draft_id")
+        .and_then(|v| Uuid::parse_str(v.trim()).ok());
+    let from_alias_id: Option<Uuid> = fields
+        .text
+        .get("from_alias_id")
+        .and_then(|v| Uuid::parse_str(v.trim()).ok());
+    let to_email_str = fields.text.get("to_email").cloned().unwrap_or_default();
+    let subject_str = fields.text.get("subject").cloned().unwrap_or_default();
+    let body_text_str = fields.text.get("body_text").cloned().unwrap_or_default();
+    let attachments = fields.attachments;
 
     let to_email = to_email_str.trim();
     if to_email.is_empty() || !to_email.contains('@') {

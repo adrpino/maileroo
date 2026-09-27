@@ -144,6 +144,8 @@ pub trait Messages {
     fn reply_placeholder(&self) -> &'static str;
     fn send_reply_button(&self) -> &'static str;
     fn you_replied(&self) -> &'static str;
+    fn reply_attachments_label(&self) -> &'static str;
+    fn reply_empty_body_error(&self) -> &'static str;
     fn api_keys_title(&self) -> &'static str;
     fn api_keys_subtitle(&self) -> &'static str;
     fn api_key_success(&self) -> &'static str;
@@ -761,6 +763,24 @@ impl Messages for Locale {
             Locale::Es => "Respondiste",
             Locale::Fr => "Vous avez répondu",
             Locale::Pt => "Você respondeu",
+        }
+    }
+
+    fn reply_attachments_label(&self) -> &'static str {
+        match self {
+            Locale::En => "Attachments",
+            Locale::Es => "Archivos adjuntos",
+            Locale::Fr => "Pièces jointes",
+            Locale::Pt => "Anexos",
+        }
+    }
+
+    fn reply_empty_body_error(&self) -> &'static str {
+        match self {
+            Locale::En => "Reply body cannot be empty.",
+            Locale::Es => "El cuerpo de la respuesta no puede estar vacío.",
+            Locale::Fr => "Le corps de la réponse ne peut pas être vide.",
+            Locale::Pt => "O corpo da resposta não pode estar vazio.",
         }
     }
 

@@ -37,12 +37,33 @@
         </div>
     </div>
 
-    {% when ThreadMessage::Outbound with { id, body_text, sent_at } %}
+    {% when ThreadMessage::Outbound with { id, body_text, sent_at, attachments } %}
     <div class="reply-row">
         <div class="reply-meta">
             <span><strong>{{ locale.you_replied() }}</strong></span>
             <span>{{ sent_at.to_string()[..16] }}</span>
         </div>
         <div class="reply-body reply-body-text">{{ body_text }}</div>
+        {% if !attachments.is_empty() %}
+        <div class="reply-attachments" style="margin-top: 8px; padding: 8px 12px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 4px;">
+            <span style="font-size: 0.85rem; color: #4a5568; display: block; margin-bottom: 4px;">
+                {{ locale.reply_attachments_label() }}:
+            </span>
+            <ul style="list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 4px;">
+                {% for att in attachments %}
+                <li style="display: flex; align-items: center; gap: 8px;">
+                    <a href="/emails/replies/{{ id }}/attachment/{{ att.id }}"
+                        style="color: #3182ce; text-decoration: none; font-weight: 500;">
+                        {% match att.filename %}
+                            {% when Some with (name) %} {{ name }}
+                            {% when None %} Unknown File
+                        {% endmatch %}
+                    </a>
+                    <span style="color: #718096; font-size: 0.85rem;">({{ att.size_bytes / 1024 }} KB)</span>
+                </li>
+                {% endfor %}
+            </ul>
+        </div>
+        {% endif %}
     </div>
 {% endmatch %}

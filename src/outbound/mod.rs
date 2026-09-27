@@ -150,6 +150,7 @@ impl OutboundService {
     }
 
     /// Primary function to send a reply directly to the recipient's mail server
+    #[allow(clippy::too_many_arguments)]
     pub async fn send_reply(
         &self,
         to: &str,
@@ -158,7 +159,8 @@ impl OutboundService {
         body: &str,
         original_message_id: Option<String>,
         new_message_id: Option<String>,
-    ) -> anyhow::Result<()> {
+        attachments: Vec<crate::outbound::mime::Attachment>,
+    ) -> anyhow::Result<Vec<u8>> {
         let email = MimeEmail {
             from: from_alias.to_string(),
             to: to.to_string(),
@@ -168,11 +170,12 @@ impl OutboundService {
             message_id: new_message_id,
             in_reply_to: original_message_id.clone(),
             references: original_message_id,
-            attachments: vec![],
+            attachments,
         };
 
         let mime = build_mime(&email);
-        self.send_raw(to, from_alias, mime.as_bytes()).await
+        self.send_raw(to, from_alias, mime.as_bytes()).await?;
+        Ok(mime.into_bytes())
     }
 
     /// Primary function to forward an email directly to the recipient's mail server

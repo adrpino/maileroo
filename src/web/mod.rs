@@ -2,6 +2,7 @@ pub mod admin_handlers;
 pub mod alias_api;
 pub mod api;
 pub mod api_auth;
+pub mod attachments_form;
 pub mod auth;
 pub mod autotls;
 pub mod dashboard;
@@ -94,6 +95,7 @@ pub enum ThreadMessage {
         id: uuid::Uuid,
         body_text: String,
         sent_at: time::OffsetDateTime,
+        attachments: Vec<crate::db::attachments::ReplyAttachmentRow>,
     },
 }
 
@@ -485,6 +487,10 @@ pub async fn create_app(state: AppState) -> Router {
             post(replies::submit_reply_handler),
         )
         .route(
+            "/emails/replies/{reply_id}/attachment/{attachment_id}",
+            get(replies::download_reply_attachment_handler),
+        )
+        .route(
             "/login",
             get(handlers::login_page)
                 .post(handlers::login_handler)
@@ -860,17 +866,22 @@ async fn get_email(
 }
 
 async fn fetch_thread_messages(state: &AppState, email_id: Uuid) -> Vec<ThreadMessage> {
-    // 1. Fetch outbound replies
-    let outbound_replies = crate::db::replies::get_replies_for_email(&state.db, email_id)
+    // 1. Fetch outbound replies along with their attachments
+    let mut outbound_replies = Vec::new();
+    for r in crate::db::replies::get_replies_for_email(&state.db, email_id)
         .await
         .unwrap_or_default()
-        .into_iter()
-        .map(|r| ThreadMessage::Outbound {
+    {
+        let attachments = crate::db::attachments::get_attachments_for_reply(&state.db, r.id)
+            .await
+            .unwrap_or_default();
+        outbound_replies.push(ThreadMessage::Outbound {
             id: r.id,
             body_text: r.body_text,
             sent_at: r.sent_at,
-        })
-        .collect::<Vec<_>>();
+            attachments,
+        });
+    }
 
     // 2. Fetch inbound child emails
     let mut inbound_replies = Vec::new();
@@ -954,6 +965,7 @@ mod tests {
             id: Uuid::new_v4(),
             body_text: "2".into(),
             sent_at: now + time::Duration::minutes(1),
+            attachments: vec![],
         };
         let m3 = ThreadMessage::Inbound {
             id: Uuid::new_v4(),
