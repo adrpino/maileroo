@@ -20,6 +20,36 @@ pub struct MultipartFields {
     pub error: Option<(StatusCode, String)>,
 }
 
+/// One attachment as delivered in a JSON API request payload.
+#[derive(Debug, serde::Deserialize)]
+pub struct ApiAttachment {
+    pub filename: String,
+    /// Base64-encoded file content.
+    pub content_b64: String,
+    /// Optional explicit MIME type; guessed from the filename when absent.
+    #[serde(default)]
+    pub content_type: Option<String>,
+}
+
+/// JSON body for the API send endpoint.
+#[derive(Debug, serde::Deserialize)]
+pub struct ApiSendRequest {
+    /// Full alias address to send from, e.g. "hello@example.com".
+    pub from_alias: String,
+    pub to: String,
+    pub subject: String,
+    pub body: String,
+    /// When present, continues an existing draft (same semantics as the UI).
+    #[serde(default)]
+    pub draft_id: Option<uuid::Uuid>,
+    /// When true, validates and builds the message without sending.
+    #[serde(default)]
+    pub dry_run: Option<bool>,
+    /// Optional inline base64 attachments.
+    #[serde(default)]
+    pub attachments: Option<Vec<ApiAttachment>>,
+}
+
 /// Cleans a client-provided filename: strips path separators and falls back
 /// to a stable placeholder when nothing usable remains.
 pub fn clean_filename(filename: Option<&str>) -> Option<String> {

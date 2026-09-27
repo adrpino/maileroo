@@ -125,6 +125,361 @@ impl IntoResponse for ToastTemplate {
     }
 }
 
+/// Errors surfaced by the shared firsthand send core.
+#[derive(Debug)]
+pub enum SendEmailError {
+    AliasNotFound,
+    AliasInactive,
+    Forbidden,
+    InvalidRecipient,
+    EmptySubject,
+    StorageFailure,
+    DeliveryFailed(String),
+    DatabaseFailure,
+}
+
+impl SendEmailError {
+    pub fn status(&self) -> StatusCode {
+        match self {
+            SendEmailError::AliasNotFound => StatusCode::NOT_FOUND,
+            SendEmailError::AliasInactive | SendEmailError::Forbidden => StatusCode::FORBIDDEN,
+            SendEmailError::InvalidRecipient | SendEmailError::EmptySubject => {
+                StatusCode::BAD_REQUEST
+            }
+            SendEmailError::StorageFailure
+            | SendEmailError::DeliveryFailed(_)
+            | SendEmailError::DatabaseFailure => StatusCode::INTERNAL_SERVER_ERROR,
+        }
+    }
+
+    pub fn message(&self) -> String {
+        match self {
+            SendEmailError::AliasNotFound => "Alias not found.".to_string(),
+            SendEmailError::AliasInactive => "Alias is not active.".to_string(),
+            SendEmailError::Forbidden => "Sending is not permitted for this user.".to_string(),
+            SendEmailError::InvalidRecipient => "Invalid recipient address.".to_string(),
+            SendEmailError::EmptySubject => "Subject cannot be empty.".to_string(),
+            SendEmailError::StorageFailure => "Failed to store the message.".to_string(),
+            SendEmailError::DeliveryFailed(e) => format!("Delivery failed: {}", e),
+            SendEmailError::DatabaseFailure => "Database error.".to_string(),
+        }
+    }
+}
+
+/// Successful result of a real (executed) send.
+#[derive(Debug, serde::Serialize)]
+pub struct SentEmailResult {
+    pub email_id: Uuid,
+    pub message_id: String,
+}
+
+/// Metadata returned by a dry run: what a real send would do, without any
+/// side effect on storage, database, or the network.
+#[derive(Debug, serde::Serialize)]
+pub struct DryRunResult {
+    pub resolved_from: String,
+    pub to: String,
+    pub subject: String,
+    pub message_id: String,
+    pub attachment_count: usize,
+    pub total_attachment_bytes: usize,
+    pub mime_size: usize,
+}
+
+/// Outcome shared by the browser handler and the JSON API handler.
+#[derive(Debug)]
+pub enum SendOutcome {
+    Sent(SentEmailResult),
+    DryRun(DryRunResult),
+}
+
+/// Resolves the alias for a firsthand send, enforcing ownership, activity,
+/// and the firsthand permission. Returns the full alias on success.
+pub async fn resolve_alias_for_sending(
+    state: &AppState,
+    user_id: Uuid,
+    can_send_firsthand: bool,
+    is_admin: bool,
+    from_alias_id: Uuid,
+) -> Result<crate::db::Alias, SendEmailError> {
+    if !can_send_firsthand && !is_admin {
+        return Err(SendEmailError::Forbidden);
+    }
+
+    match get_alias_by_id_and_user(&state.db, from_alias_id, user_id).await {
+        Ok(Some(alias)) => {
+            if !alias.active {
+                return Err(SendEmailError::AliasInactive);
+            }
+            Ok(alias)
+        }
+        Ok(None) => Err(SendEmailError::AliasNotFound),
+        Err(e) => {
+            tracing::error!("Database error fetching alias: {}", e);
+            Err(SendEmailError::DatabaseFailure)
+        }
+    }
+}
+
+/// Triggers safe, asynchronous deletion of an old draft file from disk.
+fn cleanup_old_draft(storage_dir: std::path::PathBuf, old_key: Option<Uuid>) {
+    if let Some(key) = old_key {
+        let file_path = storage_dir.join(key.to_string());
+        tokio::spawn(async move {
+            if file_path.exists() {
+                let _ = tokio::fs::remove_file(&file_path).await;
+            }
+        });
+    }
+}
+
+/// Records attachment metadata for a sent email and flags the row.
+async fn record_sent_attachments(
+    pool: DbPool,
+    email_id: Uuid,
+    metadatas: Vec<(Option<String>, String, i64)>,
+) {
+    if metadatas.is_empty() {
+        return;
+    }
+
+    for (i, (fname, ctype, size)) in metadatas.iter().enumerate() {
+        let att_id = Uuid::new_v4();
+        if let Err(err) = crate::db::attachments::insert_attachment(
+            &pool,
+            att_id,
+            email_id,
+            fname.as_deref(),
+            Some(ctype),
+            *size,
+            i as i32,
+            false,
+            None,
+        )
+        .await
+        {
+            tracing::error!("Database error inserting sent attachment row: {}", err);
+        }
+    }
+
+    match &pool {
+        DbPool::Postgres(p) => {
+            if let Err(err) =
+                sqlx::query("UPDATE sent_emails SET has_attachments = TRUE WHERE id = $1")
+                    .bind(email_id)
+                    .execute(p)
+                    .await
+            {
+                tracing::error!(
+                    "Database error setting has_attachments on sent_emails: {}",
+                    err
+                );
+            }
+        }
+        DbPool::Sqlite(p) => {
+            if let Err(err) =
+                sqlx::query("UPDATE sent_emails SET has_attachments = TRUE WHERE id = ?")
+                    .bind(email_id)
+                    .execute(p)
+                    .await
+            {
+                tracing::error!(
+                    "Database error setting has_attachments on sent_emails: {}",
+                    err
+                );
+            }
+        }
+    }
+}
+
+/// Core firsthand send path shared by the browser multipart handler and the
+/// JSON API handler. With `execute` set to false this performs every step up
+/// to MIME construction and stops: nothing is stored, transmitted, or
+/// recorded. With `execute` true it stores the message, sends it, records
+/// the outcome, and returns the persisted email id.
+#[allow(clippy::too_many_arguments)]
+pub async fn send_firsthand_email(
+    state: &AppState,
+    user_id: Uuid,
+    can_send_firsthand: bool,
+    is_admin: bool,
+    from_alias_id: Uuid,
+    to_email: &str,
+    subject: &str,
+    body_text: &str,
+    draft_id: Option<Uuid>,
+    attachments: Vec<crate::outbound::mime::Attachment>,
+    execute: bool,
+) -> Result<SendOutcome, SendEmailError> {
+    let to_email = to_email.trim();
+    if to_email.is_empty() || !to_email.contains('@') {
+        return Err(SendEmailError::InvalidRecipient);
+    }
+
+    if subject.trim().is_empty() {
+        return Err(SendEmailError::EmptySubject);
+    }
+
+    // 1. Authorize alias ownership and firsthand permission
+    let alias =
+        resolve_alias_for_sending(state, user_id, can_send_firsthand, is_admin, from_alias_id)
+            .await?;
+    let from_address = format!("{}@{}", alias.subdomain, alias.domain_name);
+
+    // 2. Generate a globally unique Message-ID up-front
+    let domain = from_address.split('@').nth(1).unwrap_or("localhost");
+    let message_id = crate::outbound::mime::generate_message_id(domain);
+
+    // 3. Construct the MIME payload using the modular builder
+    let attachment_count = attachments.len();
+    let total_attachment_bytes: usize = attachments.iter().map(|a| a.data.len()).sum();
+    let mime_email = MimeEmail {
+        from: from_address.clone(),
+        to: to_email.to_string(),
+        subject: subject.to_string(),
+        text_body: body_text.to_string(),
+        html_body: None,
+        message_id: Some(message_id.clone()),
+        in_reply_to: None,
+        references: None,
+        attachments,
+    };
+
+    let raw_mime = build_mime(&mime_email);
+
+    if !execute {
+        return Ok(SendOutcome::DryRun(DryRunResult {
+            resolved_from: from_address,
+            to: to_email.to_string(),
+            subject: subject.to_string(),
+            message_id,
+            attachment_count,
+            total_attachment_bytes,
+            mime_size: raw_mime.len(),
+        }));
+    }
+
+    // 4. Store the email on disk BEFORE sending so the Ok/Err branches share it
+    let body_key = Uuid::new_v4();
+    let file_path = state.storage_dir.join(format!("{}.eml", body_key));
+
+    if let Err(e) = write_file_async_with_permissions(&file_path, raw_mime.as_bytes()).await {
+        tracing::error!(
+            "Failed to write outbound email to disk ({}): {}",
+            file_path.display(),
+            e
+        );
+        return Err(SendEmailError::StorageFailure);
+    }
+
+    // Pre-fetch the old draft's body key so the raw draft file can be removed
+    // from disk once the message transitions out of the draft state.
+    let old_draft_body_key = match draft_id {
+        Some(d_id) => match get_sent_email_by_id_and_user(&state.db, d_id, user_id).await {
+            Ok(Some(draft)) => Some(draft.body_key),
+            _ => None,
+        },
+        None => None,
+    };
+
+    let attachment_metadatas: Vec<(Option<String>, String, i64)> = mime_email
+        .attachments
+        .iter()
+        .map(|a| {
+            (
+                a.filename.clone(),
+                a.content_type.clone(),
+                a.data.len() as i64,
+            )
+        })
+        .collect();
+
+    // 5. Send the email via the Outbound Service
+    match state
+        .outbound
+        .send_firsthand(to_email, &from_address, raw_mime.as_bytes())
+        .await
+    {
+        Ok(_) => {
+            // 6. Log the success to the database using the body_key
+            match upsert_draft(
+                &state.db,
+                draft_id,
+                user_id,
+                from_alias_id,
+                to_email,
+                subject,
+                body_key,
+            )
+            .await
+            {
+                Ok(upserted_id) => {
+                    cleanup_old_draft(state.storage_dir.clone(), old_draft_body_key);
+
+                    if let Err(err) =
+                        mark_sent_email_success(&state.db, upserted_id, &message_id).await
+                    {
+                        tracing::error!(
+                            "Database error marking sent email success for {}: {}",
+                            upserted_id,
+                            err
+                        );
+                        return Err(SendEmailError::DatabaseFailure);
+                    }
+
+                    record_sent_attachments(state.db.clone(), upserted_id, attachment_metadatas)
+                        .await;
+
+                    Ok(SendOutcome::Sent(SentEmailResult {
+                        email_id: upserted_id,
+                        message_id,
+                    }))
+                }
+                Err(e) => {
+                    tracing::error!("Failed to upsert draft before marking sent: {}", e);
+                    Err(SendEmailError::DatabaseFailure)
+                }
+            }
+        }
+        Err(e) => {
+            tracing::error!("Failed to send firsthand email: {}", e);
+
+            // Log the failure to the database
+            match upsert_draft(
+                &state.db,
+                draft_id,
+                user_id,
+                from_alias_id,
+                to_email,
+                subject,
+                body_key,
+            )
+            .await
+            {
+                Ok(upserted_id) => {
+                    cleanup_old_draft(state.storage_dir.clone(), old_draft_body_key);
+
+                    if let Err(err) =
+                        mark_sent_email_failed(&state.db, upserted_id, &e.to_string()).await
+                    {
+                        tracing::error!(
+                            "Database error marking sent email failed for {}: {}",
+                            upserted_id,
+                            err
+                        );
+                    }
+
+                    record_sent_attachments(state.db.clone(), upserted_id, attachment_metadatas)
+                        .await;
+                }
+                Err(e) => tracing::error!("Failed to upsert draft before marking failed: {}", e),
+            }
+
+            Err(SendEmailError::DeliveryFailed(e.to_string()))
+        }
+    }
+}
+
 pub async fn submit_email_handler(
     locale: Locale,
     user: FirsthandSenderUser,
@@ -185,212 +540,22 @@ pub async fn submit_email_handler(
         }
     };
 
-    // 2. Authorize alias ownership
-    let alias = match get_alias_by_id_and_user(&state.db, from_alias_id, auth_user.user_id).await {
-        Ok(Some(a)) => a,
-        Ok(None) => {
-            return ToastTemplate {
-                message: locale.toast_alias_unauthorized().to_string(),
-                success: false,
-            }
-            .into_response();
-        }
-        Err(e) => {
-            tracing::error!("Database error fetching alias: {}", e);
-            return ToastTemplate {
-                message: "Internal server error verifying alias.".to_string(),
-                success: false,
-            }
-            .into_response();
-        }
-    };
-
-    let from_address = format!("{}@{}", alias.subdomain, alias.domain_name);
-
-    // Pre-fetch the old draft's body key if this is an active draft.
-    // This allows us to cleanly delete the old raw draft file from disk once sent,
-    // preventing orphaned plain-text draft files from leaking on the host filesystem.
-    let mut old_draft_body_key = None;
-    if let Some(d_id) = draft_id {
-        let draft_res = get_sent_email_by_id_and_user(&state.db, d_id, auth_user.user_id).await;
-        if let Ok(Some(draft)) = draft_res {
-            old_draft_body_key = Some(draft.body_key);
-        }
-    }
-
-    // 3. Generate a globally unique Message-ID up-front
-    let domain = from_address.split('@').nth(1).unwrap_or("localhost");
-    let message_id = crate::outbound::mime::generate_message_id(domain);
-
-    // Extract attachment metadata before they are moved/consumed by building MimeEmail
-    let attachment_metadatas: Vec<(Option<String>, String, i64)> = attachments
-        .iter()
-        .map(|a| {
-            (
-                a.filename.clone(),
-                a.content_type.clone(),
-                a.data.len() as i64,
-            )
-        })
-        .collect();
-
-    // 4. Construct the MIME payload using our modular builder
-    let mime_email = MimeEmail {
-        from: from_address.clone(),
-        to: to_email.to_string(),
-        subject: subject_str.clone(),
-        text_body: body_text_str.clone(),
-        html_body: None, // Optional: Add WYSIWYG later in Phase 4
-        message_id: Some(message_id.clone()),
-        in_reply_to: None,
-        references: None,
+    match send_firsthand_email(
+        &state,
+        auth_user.user_id,
+        auth_user.can_send_firsthand,
+        auth_user.is_admin,
+        from_alias_id,
+        to_email,
+        &subject_str,
+        &body_text_str,
+        draft_id,
         attachments,
-    };
-
-    let raw_mime = build_mime(&mime_email);
-
-    // 5. Store the email on disk safely using a Uuid to prevent Path Traversal
-    // We do this BEFORE sending so the code isn't duplicated in the Ok/Err branches
-    let body_key = Uuid::new_v4();
-    let file_path = state.storage_dir.join(format!("{}.eml", body_key));
-
-    if let Err(e) = write_file_async_with_permissions(&file_path, raw_mime.as_bytes()).await {
-        tracing::error!(
-            "Failed to write outbound email to disk ({}): {}",
-            file_path.display(),
-            e
-        );
-    }
-
-    // Helper closure to trigger safe, asynchronous deletion of the old draft file.
-    // We execute this on a spawned task to avoid adding latency to the Axum HTTP response.
-    let old_draft_cleanup = |storage_dir: std::path::PathBuf, old_key: Option<Uuid>| {
-        if let Some(key) = old_key {
-            let file_path = storage_dir.join(key.to_string());
-            tokio::spawn(async move {
-                if file_path.exists() {
-                    let _ = tokio::fs::remove_file(&file_path).await;
-                }
-            });
-        }
-    };
-
-    // Helper function to record attachment metadata for sent emails
-    let record_sent_attachments =
-        |pool: DbPool, email_id: Uuid, metadatas: Vec<(Option<String>, String, i64)>| async move {
-            if metadatas.is_empty() {
-                return;
-            }
-
-            for (i, (fname, ctype, size)) in metadatas.iter().enumerate() {
-                let att_id = Uuid::new_v4();
-                if let Err(err) = crate::db::attachments::insert_attachment(
-                    &pool,
-                    att_id,
-                    email_id,
-                    fname.as_deref(),
-                    Some(ctype),
-                    *size,
-                    i as i32,
-                    false,
-                    None,
-                )
-                .await
-                {
-                    tracing::error!("Database error inserting sent attachment row: {}", err);
-                }
-            }
-
-            match &pool {
-                DbPool::Postgres(p) => {
-                    if let Err(err) =
-                        sqlx::query("UPDATE sent_emails SET has_attachments = TRUE WHERE id = $1")
-                            .bind(email_id)
-                            .execute(p)
-                            .await
-                    {
-                        tracing::error!(
-                            "Database error setting has_attachments on sent_emails: {}",
-                            err
-                        );
-                    }
-                }
-                DbPool::Sqlite(p) => {
-                    if let Err(err) =
-                        sqlx::query("UPDATE sent_emails SET has_attachments = TRUE WHERE id = ?")
-                            .bind(email_id)
-                            .execute(p)
-                            .await
-                    {
-                        tracing::error!(
-                            "Database error setting has_attachments on sent_emails: {}",
-                            err
-                        );
-                    }
-                }
-            }
-        };
-
-    // 6. Send the email via the Outbound Service
-    match state
-        .outbound
-        .send_firsthand(to_email, &from_address, raw_mime.as_bytes())
-        .await
+        true,
+    )
+    .await
     {
-        Ok(_) => {
-            // 7. Log the success to the database using the body_key
-            match upsert_draft(
-                &state.db,
-                draft_id,
-                auth_user.user_id,
-                from_alias_id,
-                to_email,
-                &subject_str,
-                body_key,
-            )
-            .await
-            {
-                Ok(upserted_id) => {
-                    // Clean up the old raw draft file from disk to prevent leakage
-                    old_draft_cleanup(state.storage_dir.clone(), old_draft_body_key);
-
-                    if let Err(err) =
-                        mark_sent_email_success(&state.db, upserted_id, &message_id).await
-                    {
-                        tracing::error!(
-                            "Database error marking sent email success for {}: {}",
-                            upserted_id,
-                            err
-                        );
-                        return (
-                            StatusCode::INTERNAL_SERVER_ERROR,
-                            ToastTemplate {
-                                message: "Email sent, but failed to update status in the database."
-                                    .to_string(),
-                                success: false,
-                            },
-                        )
-                            .into_response();
-                    }
-
-                    // Record attachment metadata on success
-                    record_sent_attachments(state.db.clone(), upserted_id, attachment_metadatas)
-                        .await;
-                }
-                Err(e) => {
-                    tracing::error!("Failed to upsert draft before marking sent: {}", e);
-                    return (
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        ToastTemplate {
-                            message: "Email sent, but failed to update status in the database."
-                                .to_string(),
-                            success: false,
-                        },
-                    )
-                        .into_response();
-                }
-            }
-
+        Ok(SendOutcome::Sent(_)) => {
             // Return HTMX toast with an HX-Trigger to clear the form
             let mut response = ToastTemplate {
                 message: locale.toast_email_sent_success().to_string(),
@@ -405,42 +570,26 @@ pub async fn submit_email_handler(
 
             response
         }
+        Ok(SendOutcome::DryRun(_)) => {
+            // The browser path never requests dry runs.
+            unreachable!("browser send handler always executes")
+        }
         Err(e) => {
-            tracing::error!("Failed to send firsthand email: {}", e);
-
-            // Log the failure to the database
-            match upsert_draft(
-                &state.db,
-                draft_id,
-                auth_user.user_id,
-                from_alias_id,
-                to_email,
-                &subject_str,
-                body_key,
-            )
-            .await
-            {
-                Ok(upserted_id) => {
-                    // Clean up the old raw draft file from disk to prevent leakage
-                    old_draft_cleanup(state.storage_dir.clone(), old_draft_body_key);
-
-                    if let Err(err) =
-                        mark_sent_email_failed(&state.db, upserted_id, &e.to_string()).await
-                    {
-                        tracing::error!(
-                            "Database error marking sent email failed for {}: {}",
-                            upserted_id,
-                            err
-                        );
-                    }
-
-                    // Record attachment metadata on failure
-                    record_sent_attachments(state.db.clone(), upserted_id, attachment_metadatas)
-                        .await;
-                }
-                Err(e) => tracing::error!("Failed to upsert draft before marking failed: {}", e),
+            // The one error that happens after the message hit the wire is a
+            // real server fault and keeps its 500 contract; every other
+            // failure surfaces as a 200 toast for the HTMX UI to render.
+            if matches!(e, SendEmailError::DatabaseFailure) {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    ToastTemplate {
+                        message: "Email sent, but failed to update status in the database."
+                            .to_string(),
+                        success: false,
+                    },
+                )
+                    .into_response();
             }
-
+            tracing::error!("Failed to send firsthand email: {}", e.message());
             ToastTemplate {
                 message: locale.toast_email_send_failed().to_string(),
                 success: false,
@@ -597,7 +746,7 @@ mod tests {
         assert!(rendered.contains("Compose"));
         assert!(rendered.contains("contact@maileroo.test"));
         assert!(rendered.contains(&alias1.id.to_string()));
-        assert!(rendered.contains("hx-post=\"/api/v1/emails/send\""));
+        assert!(rendered.contains("hx-post=\"/api/v1/emails/compose-send\""));
     }
 
     #[test]
@@ -670,8 +819,8 @@ mod tests {
         let button_tag = &send_button[..button_end];
 
         assert!(
-            button_tag.contains("hx-post=\"/api/v1/emails/send\""),
-            "Send button must POST to /emails/send: {button_tag}"
+            button_tag.contains("hx-post=\"/api/v1/emails/compose-send\""),
+            "Send button must POST to /emails/compose-send: {button_tag}"
         );
         assert!(
             button_tag.contains("hx-encoding=\"multipart/form-data\""),

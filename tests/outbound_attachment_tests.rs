@@ -115,10 +115,10 @@ async fn test_outbound_attachments_happy_path() {
             files,
         );
 
-        // 2. Send email via POST /api/v1/emails/send
+        // 2. Send email via POST /api/v1/emails/compose-send
         let req = Request::builder()
             .method("POST")
-            .uri("/api/v1/emails/send")
+            .uri("/api/v1/emails/compose-send")
             .header(header::COOKIE, &auth_cookie)
             .header("X-CSRF-Token", csrf_token)
             .header(header::CONTENT_TYPE, content_type)
@@ -305,7 +305,7 @@ async fn test_outbound_attachments_limits_validation() {
 
         let req = Request::builder()
             .method("POST")
-            .uri("/api/v1/emails/send")
+            .uri("/api/v1/emails/compose-send")
             .header(header::COOKIE, &auth_cookie)
             .header("X-CSRF-Token", csrf_token)
             .header(header::CONTENT_TYPE, content_type)
@@ -379,7 +379,7 @@ async fn test_outbound_attachments_deletion_cleanup() {
 
         let req = Request::builder()
             .method("POST")
-            .uri("/api/v1/emails/send")
+            .uri("/api/v1/emails/compose-send")
             .header(header::COOKIE, &auth_cookie)
             .header("X-CSRF-Token", &csrf_token)
             .header(header::CONTENT_TYPE, content_type)

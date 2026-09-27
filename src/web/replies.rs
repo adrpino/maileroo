@@ -21,6 +21,12 @@ use crate::db::attachments::{
 #[derive(serde::Deserialize)]
 pub struct ReplyRequest {
     pub body_text: String,
+    /// Optional inline base64 attachments for API callers.
+    #[serde(default)]
+    pub attachments: Option<Vec<crate::web::attachments_form::ApiAttachment>>,
+    /// When true, validates and builds the reply without sending.
+    #[serde(default)]
+    pub dry_run: Option<bool>,
 }
 
 #[derive(Template)]
@@ -43,13 +49,33 @@ impl IntoResponse for EmailReplyRowTemplate {
     }
 }
 
+/// Metadata returned by a reply dry run, without any side effect.
+#[derive(Debug, serde::Serialize)]
+pub struct ReplyDryRunResult {
+    pub resolved_from: String,
+    pub to: String,
+    pub subject: String,
+    pub in_reply_to: Option<String>,
+    pub message_id: String,
+    pub attachment_count: usize,
+    pub mime_size: usize,
+}
+
+/// Outcome of a reply submission.
+#[derive(Debug)]
+pub enum ReplyOutcome {
+    Sent(EmailReply, Vec<ReplyAttachmentRow>),
+    DryRun(ReplyDryRunResult),
+}
+
 pub async fn process_reply(
     state: &AppState,
     user_id: Uuid,
     email_id: Uuid,
     body_text: &str,
     attachments: Vec<crate::outbound::mime::Attachment>,
-) -> Result<(EmailReply, Vec<ReplyAttachmentRow>), (StatusCode, String)> {
+    execute: bool,
+) -> Result<ReplyOutcome, (StatusCode, String)> {
     // 1. Verify ownership and get email details
     let email = match get_email_by_id(&state.db, email_id, user_id).await {
         Ok(Some(e)) => e,
@@ -80,11 +106,37 @@ pub async fn process_reply(
 
     // 4. Send the reply; on success keep the built MIME so it can be stored
     //    and attachment parts stay downloadable.
+    // 4. Build the reply MIME. On a dry run this is where execution stops:
+    //    nothing is sent, stored, or recorded.
     let new_message_id = format!(
         "<{}@{}>",
         uuid::Uuid::new_v4(),
         state.outbound.identity_domain()
     );
+
+    if !execute {
+        let dry_mime = crate::outbound::mime::build_mime(&crate::outbound::mime::MimeEmail {
+            from: from_alias.clone(),
+            to: email.sender_email.clone(),
+            subject: email.subject.clone(),
+            text_body: body_text.to_string(),
+            html_body: None,
+            message_id: Some(new_message_id.clone()),
+            in_reply_to: original_message_id.clone(),
+            references: original_message_id.clone(),
+            attachments: attachments.clone(),
+        });
+
+        return Ok(ReplyOutcome::DryRun(ReplyDryRunResult {
+            resolved_from: from_alias,
+            to: email.sender_email,
+            subject: email.subject,
+            in_reply_to: original_message_id,
+            message_id: new_message_id,
+            attachment_count: attachments.len(),
+            mime_size: dry_mime.len(),
+        }));
+    }
 
     let attachment_metadatas: Vec<(Option<String>, String, usize)> = attachments
         .iter()
@@ -172,7 +224,7 @@ pub async fn process_reply(
         });
     }
 
-    Ok((reply, reply_attachments))
+    Ok(ReplyOutcome::Sent(reply, reply_attachments))
 }
 
 pub async fn submit_reply_handler(
@@ -202,10 +254,11 @@ pub async fn submit_reply_handler(
         email_id,
         &body_text,
         fields.attachments,
+        true,
     )
     .await
     {
-        Ok((reply, reply_attachments)) => {
+        Ok(ReplyOutcome::Sent(reply, reply_attachments)) => {
             let thread_msg = ThreadMessage::Outbound {
                 id: reply.id,
                 body_text: reply.body_text,
@@ -217,6 +270,10 @@ pub async fn submit_reply_handler(
                 locale,
             }
             .into_response()
+        }
+        Ok(ReplyOutcome::DryRun(_)) => {
+            // The browser handler never dry-runs.
+            (StatusCode::BAD_REQUEST, "Unexpected dry run").into_response()
         }
         Err((status, msg)) => (status, msg).into_response(),
     }
