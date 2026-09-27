@@ -578,11 +578,18 @@ pub async fn create_app(state: AppState) -> Router {
                 .route("/emails/compose", get(send_email::compose_modal_handler))
                 .route("/emails/drafts", post(send_email::save_draft_handler))
                 .route(
-                    "/emails/send",
+                    "/emails/compose-send",
                     post(send_email::submit_email_handler)
                         .layer(DefaultBodyLimit::max(MAX_UPLOAD_REQUEST_BYTES)),
                 )
+                .route(
+                    "/emails/send",
+                    post(api::send_email_api)
+                        .layer(DefaultBodyLimit::max(MAX_UPLOAD_REQUEST_BYTES)),
+                )
                 .route("/emails/{id}/reply", post(api::submit_reply_api))
+                .route("/emails/{id}", get(api::get_email_api))
+                .route("/aliases", get(api::list_aliases_api))
                 .route("/aliases/{id}/toggle", post(api::toggle_alias_forward_api))
                 .route("/labels/modal", get(labels::get_labels_modal_handler))
                 .route("/labels", post(labels::create_label_handler))

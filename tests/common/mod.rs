@@ -311,3 +311,192 @@ pub fn collect_cookies<B>(res: &axum::http::Response<B>) -> String {
         .collect::<Vec<_>>()
         .join("; ")
 }
+
+/// A captured SMTP conversation from the fake relay sink: envelope plus the
+/// raw message body exactly as transmitted.
+#[derive(Debug, Clone)]
+pub struct CapturedSmtpMessage {
+    pub mail_from: String,
+    pub rcpt_to: String,
+    pub body: Vec<u8>,
+}
+
+/// Minimal protocol-correct SMTP server used as a relay override target so
+/// outbound tests exercise the real SMTP client code path over a real TCP
+/// socket without external dependencies. Captures every accepted message
+/// into a shared buffer. STARTTLS is never advertised, so the client stays
+/// on plain TCP for the whole session.
+pub struct FakeSmtpSink {
+    pub addr: std::net::SocketAddr,
+    captured: std::sync::Arc<tokio::sync::Mutex<Vec<CapturedSmtpMessage>>>,
+    shutdown: tokio::sync::watch::Sender<bool>,
+    _handle: tokio::task::JoinHandle<()>,
+}
+
+impl FakeSmtpSink {
+    /// Starts the sink on an ephemeral 127.0.0.1 port.
+    pub async fn start() -> Self {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+        let captured: std::sync::Arc<tokio::sync::Mutex<Vec<CapturedSmtpMessage>>> =
+            std::sync::Arc::new(tokio::sync::Mutex::new(Vec::new()));
+
+        let captured_task = captured.clone();
+        let handle = tokio::spawn(async move {
+            let mut shutdown = shutdown_rx;
+            loop {
+                tokio::select! {
+                    _ = shutdown.changed() => break,
+                    accepted = listener.accept() => {
+                        let Ok((socket, _)) = accepted else { break };
+                        let captured_conn = captured_task.clone();
+                        tokio::spawn(async move {
+                            serve_smtp_connection(captured_conn, socket).await;
+                        });
+                    }
+                }
+            }
+        });
+
+        Self {
+            addr,
+            captured,
+            shutdown: shutdown_tx,
+            _handle: handle,
+        }
+    }
+
+    /// Snapshot of the messages captured so far.
+    pub async fn messages(&self) -> Vec<CapturedSmtpMessage> {
+        self.captured.lock().await.clone()
+    }
+
+    /// Relay configuration pointing at this sink for `with_relay_override`.
+    pub fn relay_config(&self) -> maileroo::outbound::relay::RelayConfig {
+        maileroo::outbound::relay::RelayConfig {
+            host: self.addr.ip().to_string(),
+            port: self.addr.port(),
+            user: "test-user".to_string(),
+            pass: "test-pass".to_string(),
+        }
+    }
+}
+
+impl Drop for FakeSmtpSink {
+    fn drop(&mut self) {
+        let _ = self.shutdown.send(true);
+        self._handle.abort();
+    }
+}
+
+/// Sends one SMTP response line and flushes.
+async fn smtp_reply<W>(writer: &mut W, line: &str)
+where
+    W: tokio::io::AsyncWrite + Unpin,
+{
+    use tokio::io::AsyncWriteExt;
+    let _ = writer.write_all(format!("{}\r\n", line).as_bytes()).await;
+    let _ = writer.flush().await;
+}
+
+/// Serves one SMTP connection with the minimal command set the relay client
+/// uses: EHLO, AUTH PLAIN, MAIL, RCPT, DATA, QUIT. STARTTLS is never
+/// advertised, keeping the client on plain TCP for the whole session.
+async fn serve_smtp_connection(
+    captured: std::sync::Arc<tokio::sync::Mutex<Vec<CapturedSmtpMessage>>>,
+    socket: tokio::net::TcpStream,
+) {
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
+
+    let (reader, mut writer) = tokio::io::split(socket);
+    let mut reader = tokio::io::BufReader::new(reader);
+
+    smtp_reply(&mut writer, "220 test-sink ready").await;
+
+    let mut mail_from = String::new();
+    let mut rcpt_to = String::new();
+
+    loop {
+        let mut line = String::new();
+        match tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            reader.read_line(&mut line),
+        )
+        .await
+        {
+            Ok(Ok(0)) | Ok(Err(_)) | Err(_) => break,
+            Ok(Ok(_)) => {}
+        }
+
+        let trimmed = line.trim_end();
+        let upper = trimmed.to_uppercase();
+
+        if upper.starts_with("EHLO") {
+            // Multi-line capabilities response without STARTTLS.
+            let _ = writer
+                .write_all(b"250-test-sink\r\n250-8BITMIME\r\n250 SIZE 36700160\r\n")
+                .await;
+        } else if upper.starts_with("AUTH PLAIN") {
+            smtp_reply(&mut writer, "235 2.7.0 Authentication successful").await;
+        } else if upper.starts_with("MAIL FROM") {
+            mail_from = extract_address(trimmed);
+            smtp_reply(&mut writer, "250 2.1.0 Sender OK").await;
+        } else if upper.starts_with("RCPT TO") {
+            rcpt_to = extract_address(trimmed);
+            smtp_reply(&mut writer, "250 2.1.5 Recipient OK").await;
+        } else if upper == "DATA" {
+            smtp_reply(&mut writer, "354 Start mail input; end with <CRLF>.<CRLF>").await;
+
+            let mut body = Vec::new();
+            loop {
+                let mut data = Vec::new();
+                match tokio::time::timeout(
+                    std::time::Duration::from_secs(15),
+                    reader.read_until(b'\n', &mut data),
+                )
+                .await
+                {
+                    Ok(Ok(0)) | Ok(Err(_)) | Err(_) => break,
+                    Ok(Ok(_)) => {}
+                }
+
+                if data.ends_with(b"\r\n.\r\n") {
+                    body.extend_from_slice(&data[..data.len() - 5]);
+                    break;
+                }
+                if data == b".\r\n" {
+                    break;
+                }
+                // Dot-stuffing removal: a leading ".." unescapes to ".".
+                if data.starts_with(b"..") {
+                    body.extend_from_slice(&data[1..]);
+                } else {
+                    body.extend_from_slice(&data);
+                }
+            }
+
+            captured.lock().await.push(CapturedSmtpMessage {
+                mail_from: mail_from.clone(),
+                rcpt_to: rcpt_to.clone(),
+                body,
+            });
+            smtp_reply(&mut writer, "250 2.6.0 Message accepted").await;
+        } else if upper == "QUIT" {
+            smtp_reply(&mut writer, "221 2.0.0 Bye").await;
+            break;
+        } else if upper == "RSET" {
+            smtp_reply(&mut writer, "250 2.0.0 OK").await;
+        } else {
+            smtp_reply(&mut writer, "500 5.5.2 Unrecognized command").await;
+        }
+    }
+}
+
+/// Pulls the address out of `MAIL FROM:<a@b>` / `RCPT TO:<b@c>` syntax.
+fn extract_address(line: &str) -> String {
+    match (line.find('<'), line.rfind('>')) {
+        (Some(open), Some(close)) if close > open => line[open + 1..close].to_string(),
+        _ => String::new(),
+    }
+}

@@ -327,7 +327,7 @@ async fn test_send_saved_draft_flow_success() {
 
         let request1 = Request::builder()
             .method("POST")
-            .uri("/api/v1/emails/send")
+            .uri("/api/v1/emails/compose-send")
             .header(axum::http::header::COOKIE, auth_cookie.clone())
             .header("X-CSRF-Token", csrf_token.clone())
             .header(axum::http::header::CONTENT_TYPE, content_type1)
@@ -353,7 +353,7 @@ async fn test_send_saved_draft_flow_success() {
 
         let request2 = Request::builder()
             .method("POST")
-            .uri("/api/v1/emails/send")
+            .uri("/api/v1/emails/compose-send")
             .header(axum::http::header::COOKIE, auth_cookie)
             .header("X-CSRF-Token", csrf_token)
             .header(axum::http::header::CONTENT_TYPE, content_type2)
@@ -617,7 +617,7 @@ async fn test_send_already_sent_email_fails_and_prevents_file_deletion() {
 
         let request = Request::builder()
             .method("POST")
-            .uri("/api/v1/emails/send")
+            .uri("/api/v1/emails/compose-send")
             .header(axum::http::header::COOKIE, auth_cookie)
             .header("X-CSRF-Token", csrf_token)
             .header(axum::http::header::CONTENT_TYPE, content_type)

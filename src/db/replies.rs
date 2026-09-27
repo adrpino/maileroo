@@ -2,7 +2,7 @@ use crate::db::DbPool;
 use time::OffsetDateTime;
 use uuid::Uuid;
 
-#[derive(serde::Serialize, sqlx::FromRow)]
+#[derive(serde::Serialize, sqlx::FromRow, Debug)]
 pub struct EmailReply {
     pub id: Uuid,
     pub email_id: Uuid,
