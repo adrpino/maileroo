@@ -115,7 +115,7 @@ async fn test_outbound_attachments_happy_path() {
             files,
         );
 
-        // 2. Send email via POST /api/v1/emails/send
+        // 2. Send email via POST /api/v1/emails/compose-send
         let req = Request::builder()
             .method("POST")
             .uri("/api/v1/emails/compose-send")
