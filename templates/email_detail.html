@@ -310,7 +310,7 @@
         </h3>
         <ul style="list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 8px;">
             {% for att in attachments %}
-            {% if !att.is_inline %}
+            {% if !att.is_inline || !att.content_type.as_deref().unwrap_or("").starts_with("image/") %}
             <li style="display: flex; align-items: center; gap: 10px;">
                 <a href="/dashboard/email/{{ id }}/attachment/{{ att.id }}" style="color: #3182ce; text-decoration: none; font-weight: 500;">
                     {% match att.filename %}
