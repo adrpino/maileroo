@@ -42,6 +42,7 @@ pub struct SentEmail {
     pub created_at: OffsetDateTime,
     pub updated_at: OffsetDateTime,
     pub sent_at: Option<OffsetDateTime>,
+    pub is_favorite: bool,
 }
 
 pub async fn insert_sent_email(
@@ -73,7 +74,7 @@ pub async fn insert_sent_email(
                 RETURNING 
                     id, user_id, from_alias_id, to_address, cc_addresses, bcc_addresses,
                     subject, body_key, status, 
-                    error_message, message_id, created_at, updated_at, sent_at
+                    error_message, message_id, created_at, updated_at, sent_at, is_favorite
                 "#,
             )
             .bind(Uuid::new_v4())
@@ -102,7 +103,7 @@ pub async fn insert_sent_email(
                 RETURNING 
                     id, user_id, from_alias_id, to_address, cc_addresses, bcc_addresses,
                     subject, body_key, status, 
-                    error_message, message_id, created_at, updated_at, sent_at
+                    error_message, message_id, created_at, updated_at, sent_at, is_favorite
                 "#,
             )
             .bind(id)
@@ -221,6 +222,7 @@ pub struct SentEmailRow {
     pub sent_at: Option<OffsetDateTime>,
     pub alias_address: String,
     pub has_attachments: bool,
+    pub is_favorite: bool,
 }
 
 pub async fn get_sent_emails_by_user_id(
@@ -527,7 +529,7 @@ pub async fn get_sent_email_by_id_and_user(
         DbPool::Postgres(pool) => {
             sqlx::query_as::<_, SentEmailRow>(
                 r#"
-                SELECT s.id, s.user_id, s.from_alias_id, s.to_address, s.cc_addresses, s.bcc_addresses, s.subject, s.body_key, s.status, s.error_message, s.message_id, s.created_at, s.updated_at, s.sent_at, s.has_attachments, a.subdomain || '@' || d.name as alias_address
+                SELECT s.id, s.user_id, s.from_alias_id, s.to_address, s.cc_addresses, s.bcc_addresses, s.subject, s.body_key, s.status, s.error_message, s.message_id, s.created_at, s.updated_at, s.sent_at, s.has_attachments, s.is_favorite, a.subdomain || '@' || d.name as alias_address
                 FROM sent_emails s
                 JOIN aliases a ON s.from_alias_id = a.id
                 JOIN domains d ON a.domain_id = d.id
@@ -542,7 +544,7 @@ pub async fn get_sent_email_by_id_and_user(
         DbPool::Sqlite(pool) => {
             let email = sqlx::query_as::<sqlx::Sqlite, SentEmailRow>(
                 r#"
-                SELECT s.id, s.user_id, s.from_alias_id, s.to_address, s.cc_addresses, s.bcc_addresses, s.subject, s.body_key, s.status, s.error_message, s.message_id, s.created_at, s.updated_at, s.sent_at, s.has_attachments, a.subdomain || '@' || d.name as alias_address
+                SELECT s.id, s.user_id, s.from_alias_id, s.to_address, s.cc_addresses, s.bcc_addresses, s.subject, s.body_key, s.status, s.error_message, s.message_id, s.created_at, s.updated_at, s.sent_at, s.has_attachments, s.is_favorite, a.subdomain || '@' || d.name as alias_address
                 FROM sent_emails s
                 JOIN aliases a ON s.from_alias_id = a.id
                 JOIN domains d ON a.domain_id = d.id

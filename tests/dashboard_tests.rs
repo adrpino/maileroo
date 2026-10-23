@@ -941,3 +941,341 @@ async fn test_inline_image_e2e_dashboard_render() {
 
     }).await;
 }
+
+#[tokio::test]
+async fn test_toggle_favorite_endpoint() {
+    common::run_on_all_dbs(|db| async move {
+        let temp_storage = tempfile::tempdir().unwrap();
+        let user = common::create_test_user(&db, "fav_tester@example.com", "password").await;
+        let alias =
+            common::create_test_alias(&db, user.id, "example.com", "favtoggle", "dest@example.com")
+                .await;
+
+        let email = maileroo::db::insert_email(
+            &db,
+            alias.id,
+            "sender@external.com",
+            "Favorite Test Email",
+            Uuid::new_v4(),
+            None,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+
+        let resolver = hickory_resolver::TokioResolver::builder_tokio()
+            .unwrap()
+            .build()
+            .unwrap();
+        let state = AppState {
+            db: db.clone(),
+            storage_dir: temp_storage.path().to_path_buf(),
+            dns_scanner: DnsScanner::new(resolver.clone()),
+            tx: tokio::sync::broadcast::channel::<DashboardEvent>(100).0,
+            outbound: Arc::new(OutboundService::new(
+                "key".into(),
+                resolver,
+                "example.com".into(),
+                db.clone(),
+                temp_storage.path().to_path_buf(),
+            )),
+            config: AppConfig { auto_tls: None },
+            filter_engine: maileroo::filter::FilterEngine::default(),
+            backfill_engine: maileroo::filter::BackfillEngine::default(),
+        };
+
+        let app = create_app(state).await;
+        let auth_cookie =
+            common::get_auth_cookie(app.clone(), "fav_tester@example.com", "password").await;
+        let csrf_token = common::extract_csrf_token(&auth_cookie);
+
+        // 1. Toggle favorite from dashboard (no context param) -> returns row with filled star
+        let req = Request::builder()
+            .method("POST")
+            .uri(format!("/emails/{}/toggle-favorite", email.id))
+            .header(axum::http::header::COOKIE, &auth_cookie)
+            .header("X-CSRF-Token", &csrf_token)
+            .body(Body::empty())
+            .unwrap();
+
+        let resp = app.clone().oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let body = String::from_utf8_lossy(&bytes);
+        assert!(
+            body.contains("★"),
+            "Row should show filled star when favorited"
+        );
+
+        let updated = maileroo::db::get_email_by_id(&db, email.id, user.id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(updated.is_favorite);
+
+        // 2. Toggle favorite with ?context=detail -> returns detail button snippet
+        let req2 = Request::builder()
+            .method("POST")
+            .uri(format!(
+                "/emails/{}/toggle-favorite?context=detail",
+                email.id
+            ))
+            .header(axum::http::header::COOKIE, &auth_cookie)
+            .header("X-CSRF-Token", &csrf_token)
+            .body(Body::empty())
+            .unwrap();
+
+        let resp2 = app.clone().oneshot(req2).await.unwrap();
+        assert_eq!(resp2.status(), StatusCode::OK);
+        let bytes2 = axum::body::to_bytes(resp2.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let body2 = String::from_utf8_lossy(&bytes2);
+        assert!(
+            body2.contains("favorite-btn-"),
+            "Should return button snippet"
+        );
+        assert!(
+            body2.contains("☆"),
+            "Should return outline star when unfavorited"
+        );
+
+        let updated2 = maileroo::db::get_email_by_id(&db, email.id, user.id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(!updated2.is_favorite);
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn test_mark_email_unread_and_batch_endpoints() {
+    common::run_on_all_dbs(|db| async move {
+        let temp_storage = tempfile::tempdir().unwrap();
+        let user = common::create_test_user(&db, "unread_tester@example.com", "password").await;
+        let alias = common::create_test_alias(
+            &db,
+            user.id,
+            "example.com",
+            "markunread",
+            "dest@example.com",
+        )
+        .await;
+
+        let email1 = maileroo::db::insert_email(
+            &db,
+            alias.id,
+            "s1@test.com",
+            "Sub 1",
+            Uuid::new_v4(),
+            None,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        let email2 = maileroo::db::insert_email(
+            &db,
+            alias.id,
+            "s2@test.com",
+            "Sub 2",
+            Uuid::new_v4(),
+            None,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+
+        // Mark both as viewed
+        maileroo::db::mark_email_as_viewed(&db, email1.id, user.id)
+            .await
+            .unwrap();
+        maileroo::db::mark_email_as_viewed(&db, email2.id, user.id)
+            .await
+            .unwrap();
+
+        let resolver = hickory_resolver::TokioResolver::builder_tokio()
+            .unwrap()
+            .build()
+            .unwrap();
+        let state = AppState {
+            db: db.clone(),
+            storage_dir: temp_storage.path().to_path_buf(),
+            dns_scanner: DnsScanner::new(resolver.clone()),
+            tx: tokio::sync::broadcast::channel::<DashboardEvent>(100).0,
+            outbound: Arc::new(OutboundService::new(
+                "key".into(),
+                resolver,
+                "example.com".into(),
+                db.clone(),
+                temp_storage.path().to_path_buf(),
+            )),
+            config: AppConfig { auto_tls: None },
+            filter_engine: maileroo::filter::FilterEngine::default(),
+            backfill_engine: maileroo::filter::BackfillEngine::default(),
+        };
+
+        let app = create_app(state).await;
+        let auth_cookie =
+            common::get_auth_cookie(app.clone(), "unread_tester@example.com", "password").await;
+        let csrf_token = common::extract_csrf_token(&auth_cookie);
+
+        // 1. Single email mark unread (from detail view) -> redirects to dashboard
+        let req = Request::builder()
+            .method("POST")
+            .uri(format!("/emails/{}/mark-unread", email1.id))
+            .header(axum::http::header::COOKIE, &auth_cookie)
+            .header("X-CSRF-Token", &csrf_token)
+            .body(Body::empty())
+            .unwrap();
+
+        let resp = app.clone().oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert_eq!(resp.headers().get("HX-Redirect").unwrap(), "/dashboard");
+
+        let e1 = maileroo::db::get_email_by_id(&db, email1.id, user.id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(!e1.viewed, "email1 should now be unread");
+
+        // 2. Batch mark unread
+        let form_body = format!("email_ids={}&email_ids={}", email1.id, email2.id);
+        let batch_req = Request::builder()
+            .method("POST")
+            .uri("/emails/batch-mark-unread")
+            .header(axum::http::header::COOKIE, &auth_cookie)
+            .header("X-CSRF-Token", &csrf_token)
+            .header(
+                axum::http::header::CONTENT_TYPE,
+                "application/x-www-form-urlencoded",
+            )
+            .body(Body::from(form_body))
+            .unwrap();
+
+        let batch_resp = app.clone().oneshot(batch_req).await.unwrap();
+        assert_eq!(batch_resp.status(), StatusCode::OK);
+        assert_eq!(
+            batch_resp.headers().get("HX-Redirect").unwrap(),
+            "/dashboard"
+        );
+
+        let e2 = maileroo::db::get_email_by_id(&db, email2.id, user.id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(!e2.viewed, "email2 should now be unread");
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn test_favorites_folder_dashboard() {
+    common::run_on_all_dbs(|db| async move {
+        let temp_storage = tempfile::tempdir().unwrap();
+        let user = common::create_test_user(&db, "folder_tester@example.com", "password").await;
+        let alias =
+            common::create_test_alias(&db, user.id, "example.com", "favfolder", "dest@example.com")
+                .await;
+
+        // Create 1 favorited received, 1 regular received, 1 favorited sent
+        let e_fav = maileroo::db::insert_email(
+            &db,
+            alias.id,
+            "fav_inbound@test.com",
+            "Starred Received",
+            Uuid::new_v4(),
+            None,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        let _e_reg = maileroo::db::insert_email(
+            &db,
+            alias.id,
+            "reg_inbound@test.com",
+            "Normal Received",
+            Uuid::new_v4(),
+            None,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        let sent_fav = common::create_test_draft(
+            &db,
+            user.id,
+            alias.id,
+            "outbound_recipient@test.com",
+            "Starred Outbound",
+            EmailStatus::Sent,
+        )
+        .await;
+
+        maileroo::db::toggle_email_favorite(&db, e_fav.id, user.id)
+            .await
+            .unwrap();
+        maileroo::db::toggle_email_favorite(&db, sent_fav.id, user.id)
+            .await
+            .unwrap();
+
+        let resolver = hickory_resolver::TokioResolver::builder_tokio()
+            .unwrap()
+            .build()
+            .unwrap();
+        let state = AppState {
+            db: db.clone(),
+            storage_dir: temp_storage.path().to_path_buf(),
+            dns_scanner: DnsScanner::new(resolver.clone()),
+            tx: tokio::sync::broadcast::channel::<DashboardEvent>(100).0,
+            outbound: Arc::new(OutboundService::new(
+                "key".into(),
+                resolver,
+                "example.com".into(),
+                db.clone(),
+                temp_storage.path().to_path_buf(),
+            )),
+            config: AppConfig { auto_tls: None },
+            filter_engine: maileroo::filter::FilterEngine::default(),
+            backfill_engine: maileroo::filter::BackfillEngine::default(),
+        };
+
+        let app = create_app(state).await;
+        let auth_cookie =
+            common::get_auth_cookie(app.clone(), "folder_tester@example.com", "password").await;
+
+        let req = Request::builder()
+            .method("GET")
+            .uri("/dashboard?folder=favorites")
+            .header(axum::http::header::COOKIE, &auth_cookie)
+            .body(Body::empty())
+            .unwrap();
+
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let body = String::from_utf8_lossy(&bytes);
+
+        assert!(
+            body.contains("Starred Received"),
+            "Favorites folder should contain favorited received email"
+        );
+        assert!(
+            body.contains("Starred Outbound"),
+            "Favorites folder should contain favorited sent email"
+        );
+        assert!(
+            !body.contains("Normal Received"),
+            "Favorites folder should NOT contain non-favorited email"
+        );
+    })
+    .await;
+}

@@ -131,6 +131,12 @@ pub trait Messages {
     fn folder_inbox(&self) -> &'static str;
     fn folder_sent(&self) -> &'static str;
     fn folder_drafts(&self) -> &'static str;
+    fn folder_favorites(&self) -> &'static str;
+    fn favorite_emails_title(&self) -> &'static str;
+    fn mark_unread_button(&self) -> &'static str;
+    fn batch_mark_unread_button(&self) -> &'static str;
+    fn favorite_button(&self) -> &'static str;
+    fn unfavorite_button(&self) -> &'static str;
     fn search_placeholder(&self) -> &'static str;
     fn pagination_previous(&self) -> &'static str;
     fn pagination_next(&self) -> &'static str;
@@ -638,6 +644,60 @@ impl Messages for Locale {
             Locale::Es => "Borradores",
             Locale::Fr => "Brouillons",
             Locale::Pt => "Rascunhos",
+        }
+    }
+
+    fn folder_favorites(&self) -> &'static str {
+        match self {
+            Locale::En => "Favorites",
+            Locale::Es => "Favoritos",
+            Locale::Fr => "Favoris",
+            Locale::Pt => "Favoritos",
+        }
+    }
+
+    fn favorite_emails_title(&self) -> &'static str {
+        match self {
+            Locale::En => "Favorite Emails",
+            Locale::Es => "Correos Favoritos",
+            Locale::Fr => "E-mails favoris",
+            Locale::Pt => "E-mails Favoritos",
+        }
+    }
+
+    fn mark_unread_button(&self) -> &'static str {
+        match self {
+            Locale::En => "Mark as Unread",
+            Locale::Es => "Marcar como no leído",
+            Locale::Fr => "Marquer comme non lu",
+            Locale::Pt => "Marcar como não lido",
+        }
+    }
+
+    fn batch_mark_unread_button(&self) -> &'static str {
+        match self {
+            Locale::En => "Mark Unread",
+            Locale::Es => "Marcar no leído",
+            Locale::Fr => "Marquer non lu",
+            Locale::Pt => "Marcar não lido",
+        }
+    }
+
+    fn favorite_button(&self) -> &'static str {
+        match self {
+            Locale::En => "Favorite",
+            Locale::Es => "Favorito",
+            Locale::Fr => "Favori",
+            Locale::Pt => "Favorito",
+        }
+    }
+
+    fn unfavorite_button(&self) -> &'static str {
+        match self {
+            Locale::En => "Remove Favorite",
+            Locale::Es => "Quitar de Favoritos",
+            Locale::Fr => "Retirer des favoris",
+            Locale::Pt => "Remover dos Favoritos",
         }
     }
 

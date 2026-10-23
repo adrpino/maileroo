@@ -82,6 +82,7 @@ pub struct ReceivedEmail {
     pub message_id: Option<String>,
     pub thread_id: Option<uuid::Uuid>,
     pub has_attachments: bool,
+    pub is_favorite: bool,
 }
 
 pub enum ThreadMessage {
@@ -479,8 +480,20 @@ pub async fn create_app(state: AppState) -> Router {
             post(dashboard::batch_delete_emails_confirm_handler),
         )
         .route(
+            "/emails/batch-mark-unread",
+            post(dashboard::batch_mark_unread_handler),
+        )
+        .route(
             "/emails/{email_id}",
             get(get_email).delete(dashboard::delete_email_handler),
+        )
+        .route(
+            "/emails/{email_id}/toggle-favorite",
+            post(dashboard::toggle_favorite_handler),
+        )
+        .route(
+            "/emails/{email_id}/mark-unread",
+            post(dashboard::mark_email_unread_handler),
         )
         .route(
             "/emails/{email_id}/reply",
@@ -795,6 +808,7 @@ async fn get_email(
                         attachments,
                         labels,
                         all_user_labels,
+                        is_favorite: email.is_favorite,
                     }
                     .into_response()
                 }
@@ -853,6 +867,7 @@ async fn get_email(
                         attachments,
                         labels: vec![],
                         all_user_labels: vec![],
+                        is_favorite: email.is_favorite,
                     }
                     .into_response()
                 }
@@ -1011,6 +1026,7 @@ mod tests {
             thread_id: None,
             last_activity_at: now,
             has_attachments: false,
+            is_favorite: false,
         };
 
         let json = serde_json::to_value(&email).unwrap();

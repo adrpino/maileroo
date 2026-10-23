@@ -137,6 +137,13 @@ impl AnyEmail {
             AnyEmail::Sent(e) => e.body_key,
         }
     }
+
+    pub fn is_favorite(&self) -> bool {
+        match self {
+            AnyEmail::Received(e) => e.is_favorite,
+            AnyEmail::Sent(e) => e.is_favorite,
+        }
+    }
 }
 
 pub async fn get_any_email(
@@ -177,6 +184,7 @@ pub async fn get_email_by_id(
                     e.message_id,
                     e.thread_id,
                     e.has_attachments,
+                    e.is_favorite,
                     a.user_id
                  FROM received_emails e 
                  JOIN aliases a on a.id = e.alias_id
@@ -205,6 +213,7 @@ pub async fn get_email_by_id(
                     e.message_id,
                     e.thread_id,
                     e.has_attachments,
+                    e.is_favorite,
                     a.user_id
                  FROM received_emails e 
                  JOIN aliases a on a.id = e.alias_id
@@ -281,6 +290,7 @@ pub async fn get_email_by_user_id(
                     e.message_id,
                     e.thread_id,
                     e.has_attachments,
+                    e.is_favorite,
                     a.user_id
                  FROM received_emails e 
                  JOIN aliases a on a.id = e.alias_id
@@ -323,6 +333,7 @@ pub async fn get_email_by_user_id(
                     e.message_id,
                     e.thread_id,
                     e.has_attachments,
+                    e.is_favorite,
                     a.user_id
                  FROM received_emails e 
                  JOIN aliases a on a.id = e.alias_id
@@ -495,6 +506,7 @@ pub async fn get_child_emails(
                     e.message_id,
                     e.thread_id,
                     e.has_attachments,
+                    e.is_favorite,
                     a.user_id
                  FROM received_emails e 
                  JOIN aliases a on a.id = e.alias_id
@@ -524,6 +536,7 @@ pub async fn get_child_emails(
                     e.message_id,
                     e.thread_id,
                     e.has_attachments,
+                    e.is_favorite,
                     a.user_id
                  FROM received_emails e 
                  JOIN aliases a on a.id = e.alias_id
@@ -553,9 +566,9 @@ pub async fn insert_email(
 
     match pool {
         DbPool::Postgres(pool) => {
-            // If this is a reply (has thread_id), update the last_activity_at of the root email
+            // If this is a reply (has thread_id), update the last_activity_at and reset viewed of the root email
             if let Some(root_id) = thread_id {
-                sqlx::query("UPDATE received_emails SET last_activity_at = $1 WHERE id = $2")
+                sqlx::query("UPDATE received_emails SET last_activity_at = $1, viewed = FALSE WHERE id = $2")
                     .bind(received_at_val)
                     .bind(root_id)
                     .execute(pool)
@@ -592,7 +605,8 @@ pub async fn insert_email(
                     i.forwarded as forwarded,
                     i.message_id,
                     i.thread_id,
-                    i.has_attachments
+                    i.has_attachments,
+                    i.is_favorite
                 FROM inserted i
                 JOIN aliases a ON i.alias_id = a.id
                 JOIN domains d ON a.domain_id = d.id"#,
@@ -612,11 +626,13 @@ pub async fn insert_email(
         }
         DbPool::Sqlite(pool) => {
             if let Some(root_id) = thread_id {
-                sqlx::query("UPDATE received_emails SET last_activity_at = ? WHERE id = ?")
-                    .bind(received_at_val)
-                    .bind(root_id)
-                    .execute(pool)
-                    .await?;
+                sqlx::query(
+                    "UPDATE received_emails SET last_activity_at = ?, viewed = 0 WHERE id = ?",
+                )
+                .bind(received_at_val)
+                .bind(root_id)
+                .execute(pool)
+                .await?;
             }
 
             let id = uuid::Uuid::new_v4();
@@ -664,6 +680,7 @@ pub async fn insert_email(
                     e.message_id,
                     e.thread_id,
                     e.has_attachments,
+                    e.is_favorite,
                     a.user_id
                 FROM received_emails e
                 JOIN aliases a ON e.alias_id = a.id
@@ -850,6 +867,20 @@ pub async fn delete_old_emails(
                        WHERE a.id = received_emails.alias_id
                        AND u.disable_autoclean = FALSE
                    ))
+                   AND NOT (
+                       EXISTS (
+                           SELECT 1 FROM aliases a
+                           JOIN users u ON a.user_id = u.id
+                           WHERE a.id = received_emails.alias_id
+                             AND u.is_admin = TRUE
+                       )
+                       AND EXISTS (
+                           SELECT 1 FROM received_emails t
+                           WHERE (t.id = COALESCE(received_emails.thread_id, received_emails.id)
+                               OR t.thread_id = COALESCE(received_emails.thread_id, received_emails.id))
+                             AND t.is_favorite = TRUE
+                       )
+                   )
                    RETURNING body_key"#,
             )
             .bind(retention_days as f64)
@@ -869,7 +900,21 @@ pub async fn delete_old_emails(
                        JOIN users u ON a.user_id = u.id
                        WHERE a.id = received_emails.alias_id
                        AND u.disable_autoclean = 0
-                   ))"#,
+                   ))
+                   AND NOT (
+                       EXISTS (
+                           SELECT 1 FROM aliases a
+                           JOIN users u ON a.user_id = u.id
+                           WHERE a.id = received_emails.alias_id
+                             AND u.is_admin = 1
+                       )
+                       AND EXISTS (
+                           SELECT 1 FROM received_emails t
+                           WHERE (t.id = COALESCE(received_emails.thread_id, received_emails.id)
+                               OR t.thread_id = COALESCE(received_emails.thread_id, received_emails.id))
+                             AND t.is_favorite = 1
+                       )
+                   )"#,
             )
             .bind(&modifier)
             .fetch_all(pool)
@@ -883,7 +928,21 @@ pub async fn delete_old_emails(
                        JOIN users u ON a.user_id = u.id
                        WHERE a.id = received_emails.alias_id
                        AND u.disable_autoclean = 0
-                   ))"#,
+                   ))
+                   AND NOT (
+                       EXISTS (
+                           SELECT 1 FROM aliases a
+                           JOIN users u ON a.user_id = u.id
+                           WHERE a.id = received_emails.alias_id
+                             AND u.is_admin = 1
+                       )
+                       AND EXISTS (
+                           SELECT 1 FROM received_emails t
+                           WHERE (t.id = COALESCE(received_emails.thread_id, received_emails.id)
+                               OR t.thread_id = COALESCE(received_emails.thread_id, received_emails.id))
+                             AND t.is_favorite = 1
+                       )
+                   )"#,
             )
             .bind(&modifier)
             .execute(pool)
@@ -916,39 +975,405 @@ pub async fn get_alias_count(pool: &DbPool, user_id: uuid::Uuid) -> Result<i64, 
     }
 }
 
+pub async fn set_email_viewed(
+    pool: &DbPool,
+    email_id: uuid::Uuid,
+    user_id: uuid::Uuid,
+    viewed: bool,
+) -> Result<bool, sqlx::Error> {
+    match pool {
+        DbPool::Postgres(pool) => {
+            let res = sqlx::query(
+                r#"UPDATE received_emails e
+                   SET viewed = $1
+                   FROM aliases a
+                   WHERE e.alias_id = a.id
+                     AND e.id = $2
+                     AND a.user_id = $3"#,
+            )
+            .bind(viewed)
+            .bind(email_id)
+            .bind(user_id)
+            .execute(pool)
+            .await?;
+            Ok(res.rows_affected() > 0)
+        }
+        DbPool::Sqlite(pool) => {
+            let res = sqlx::query(
+                r#"UPDATE received_emails 
+                   SET viewed = ?
+                   WHERE id = ? 
+                     AND alias_id IN (SELECT id FROM aliases WHERE user_id = ?)"#,
+            )
+            .bind(viewed)
+            .bind(email_id)
+            .bind(user_id)
+            .execute(pool)
+            .await?;
+            Ok(res.rows_affected() > 0)
+        }
+    }
+}
+
 pub async fn mark_email_as_viewed(
     pool: &DbPool,
     email_id: uuid::Uuid,
     user_id: uuid::Uuid,
 ) -> Result<(), sqlx::Error> {
+    set_email_viewed(pool, email_id, user_id, true).await?;
+    Ok(())
+}
+
+pub async fn batch_set_emails_viewed(
+    pool: &DbPool,
+    email_ids: &[uuid::Uuid],
+    user_id: uuid::Uuid,
+    viewed: bool,
+) -> Result<u64, sqlx::Error> {
+    if email_ids.is_empty() {
+        return Ok(0);
+    }
     match pool {
         DbPool::Postgres(pool) => {
-            sqlx::query(
+            let res = sqlx::query(
                 r#"UPDATE received_emails e
-                   SET viewed = true
+                   SET viewed = $1
+                   FROM aliases a
+                   WHERE e.alias_id = a.id
+                     AND e.id = ANY($2)
+                     AND a.user_id = $3"#,
+            )
+            .bind(viewed)
+            .bind(email_ids)
+            .bind(user_id)
+            .execute(pool)
+            .await?;
+            Ok(res.rows_affected())
+        }
+        DbPool::Sqlite(pool) => {
+            let placeholders = vec!["?"; email_ids.len()].join(", ");
+            let sql = format!(
+                "UPDATE received_emails SET viewed = ? WHERE id IN ({}) AND alias_id IN (SELECT id FROM aliases WHERE user_id = ?)",
+                placeholders
+            );
+            let mut q = sqlx::query(&sql).bind(viewed);
+            for id in email_ids {
+                q = q.bind(id);
+            }
+            q = q.bind(user_id);
+            let res = q.execute(pool).await?;
+            Ok(res.rows_affected())
+        }
+    }
+}
+
+pub async fn toggle_email_favorite(
+    pool: &DbPool,
+    email_id: uuid::Uuid,
+    user_id: uuid::Uuid,
+) -> Result<Option<bool>, sqlx::Error> {
+    match pool {
+        DbPool::Postgres(pool) => {
+            let received_res = sqlx::query_scalar::<_, bool>(
+                r#"UPDATE received_emails e
+                   SET is_favorite = NOT e.is_favorite
                    FROM aliases a
                    WHERE e.alias_id = a.id
                      AND e.id = $1
-                     AND a.user_id = $2"#,
+                     AND a.user_id = $2
+                   RETURNING e.is_favorite"#,
             )
             .bind(email_id)
             .bind(user_id)
-            .execute(pool)
+            .fetch_optional(pool)
             .await?;
-            Ok(())
+
+            if let Some(fav) = received_res {
+                return Ok(Some(fav));
+            }
+
+            let sent_res = sqlx::query_scalar::<_, bool>(
+                r#"UPDATE sent_emails
+                   SET is_favorite = NOT is_favorite
+                   WHERE id = $1 AND user_id = $2
+                   RETURNING is_favorite"#,
+            )
+            .bind(email_id)
+            .bind(user_id)
+            .fetch_optional(pool)
+            .await?;
+
+            Ok(sent_res)
         }
         DbPool::Sqlite(pool) => {
-            sqlx::query(
-                r#"UPDATE received_emails 
-                   SET viewed = 1
-                   WHERE id = ? 
-                     AND alias_id IN (SELECT id FROM aliases WHERE user_id = ?)"#,
+            let received_res = sqlx::query_scalar::<sqlx::Sqlite, bool>(
+                r#"UPDATE received_emails
+                   SET is_favorite = NOT is_favorite
+                   WHERE id = ? AND alias_id IN (SELECT id FROM aliases WHERE user_id = ?)
+                   RETURNING is_favorite"#,
             )
             .bind(email_id)
             .bind(user_id)
-            .execute(pool)
+            .fetch_optional(pool)
             .await?;
-            Ok(())
+
+            if let Some(fav) = received_res {
+                return Ok(Some(fav));
+            }
+
+            let sent_res = sqlx::query_scalar::<sqlx::Sqlite, bool>(
+                r#"UPDATE sent_emails
+                   SET is_favorite = NOT is_favorite
+                   WHERE id = ? AND user_id = ?
+                   RETURNING is_favorite"#,
+            )
+            .bind(email_id)
+            .bind(user_id)
+            .fetch_optional(pool)
+            .await?;
+
+            Ok(sent_res)
+        }
+    }
+}
+
+#[derive(sqlx::FromRow, Debug, Clone)]
+pub struct FavoriteEmailRow {
+    pub id: uuid::Uuid,
+    pub alias_address: String,
+    pub correspondent_email: String,
+    pub subject: String,
+    pub date: time::OffsetDateTime,
+    pub is_sent_folder: bool,
+    pub is_viewed: bool,
+    pub outbound_status: Option<String>,
+    pub has_attachments: bool,
+    pub is_favorite: bool,
+}
+
+pub async fn get_favorite_emails_by_user_id(
+    pool: &DbPool,
+    user_id: uuid::Uuid,
+    limit: i64,
+    offset: i64,
+    alias_address: Option<String>,
+    query: Option<String>,
+) -> Result<Vec<FavoriteEmailRow>, sqlx::Error> {
+    match pool {
+        DbPool::Postgres(pool) => {
+            let emails = sqlx::query_as::<_, FavoriteEmailRow>(
+                r#"SELECT * FROM (
+                    SELECT 
+                        e.id,
+                        (a.subdomain || '@' || d.name) as alias_address,
+                        e.sender_email as correspondent_email,
+                        e.subject,
+                        e.last_activity_at as date,
+                        FALSE as is_sent_folder,
+                        e.viewed as is_viewed,
+                        NULL::text as outbound_status,
+                        e.has_attachments,
+                        e.is_favorite
+                    FROM received_emails e
+                    JOIN aliases a ON e.alias_id = a.id
+                    JOIN domains d ON a.domain_id = d.id
+                    WHERE a.user_id = $1 AND e.thread_id IS NULL AND e.is_favorite = TRUE
+                      AND ($4::TEXT IS NULL OR (a.subdomain || '@' || d.name) = $4)
+                      AND ($5::TEXT IS NULL OR e.subject ILIKE '%' || $5 || '%' OR e.sender_email ILIKE '%' || $5 || '%')
+
+                    UNION ALL
+
+                    SELECT
+                        s.id,
+                        (a.subdomain || '@' || d.name) as alias_address,
+                        s.to_address as correspondent_email,
+                        s.subject,
+                        COALESCE(s.sent_at, s.created_at) as date,
+                        TRUE as is_sent_folder,
+                        TRUE as is_viewed,
+                        s.status::text as outbound_status,
+                        s.has_attachments,
+                        s.is_favorite
+                    FROM sent_emails s
+                    JOIN aliases a ON s.from_alias_id = a.id
+                    JOIN domains d ON a.domain_id = d.id
+                    WHERE s.user_id = $1 AND s.is_favorite = TRUE AND s.status != 'draft'::email_status
+                      AND ($4::TEXT IS NULL OR (a.subdomain || '@' || d.name) = $4)
+                      AND ($5::TEXT IS NULL OR s.subject ILIKE '%' || $5 || '%' OR s.to_address ILIKE '%' || $5 || '%')
+                ) combined
+                ORDER BY date DESC
+                LIMIT $2 OFFSET $3"#,
+            )
+            .bind(user_id)
+            .bind(limit)
+            .bind(offset)
+            .bind(alias_address)
+            .bind(query)
+            .fetch_all(pool)
+            .await?;
+            Ok(emails)
+        }
+        DbPool::Sqlite(pool) => {
+            let mut sql = String::from(
+                r#"SELECT * FROM (
+                    SELECT 
+                        e.id,
+                        (a.subdomain || '@' || d.name) as alias_address,
+                        e.sender_email as correspondent_email,
+                        e.subject,
+                        e.last_activity_at as date,
+                        0 as is_sent_folder,
+                        e.viewed as is_viewed,
+                        NULL as outbound_status,
+                        e.has_attachments,
+                        e.is_favorite
+                    FROM received_emails e
+                    JOIN aliases a ON e.alias_id = a.id
+                    JOIN domains d ON a.domain_id = d.id
+                    WHERE a.user_id = ? AND e.thread_id IS NULL AND e.is_favorite = 1"#,
+            );
+
+            if alias_address.is_some() {
+                sql.push_str(" AND (a.subdomain || '@' || d.name) = ?");
+            }
+            if query.is_some() {
+                sql.push_str(" AND (e.subject LIKE ? OR e.sender_email LIKE ?)");
+            }
+
+            sql.push_str(
+                r#"
+                    UNION ALL
+
+                    SELECT
+                        s.id,
+                        (a.subdomain || '@' || d.name) as alias_address,
+                        s.to_address as correspondent_email,
+                        s.subject,
+                        COALESCE(s.sent_at, s.created_at) as date,
+                        1 as is_sent_folder,
+                        1 as is_viewed,
+                        s.status as outbound_status,
+                        s.has_attachments,
+                        s.is_favorite
+                    FROM sent_emails s
+                    JOIN aliases a ON s.from_alias_id = a.id
+                    JOIN domains d ON a.domain_id = d.id
+                    WHERE s.user_id = ? AND s.is_favorite = 1 AND s.status != 'draft'"#,
+            );
+
+            if alias_address.is_some() {
+                sql.push_str(" AND (a.subdomain || '@' || d.name) = ?");
+            }
+            if query.is_some() {
+                sql.push_str(" AND (s.subject LIKE ? OR s.to_address LIKE ?)");
+            }
+
+            sql.push_str(") ORDER BY date DESC LIMIT ? OFFSET ?");
+
+            let mut q = sqlx::query_as::<sqlx::Sqlite, FavoriteEmailRow>(&sql).bind(user_id);
+
+            if let Some(alias) = &alias_address {
+                q = q.bind(alias);
+            }
+            if let Some(search) = &query {
+                let pattern = format!("%{}%", search);
+                q = q.bind(pattern.clone()).bind(pattern);
+            }
+
+            q = q.bind(user_id);
+
+            if let Some(alias) = &alias_address {
+                q = q.bind(alias);
+            }
+            if let Some(search) = &query {
+                let pattern = format!("%{}%", search);
+                q = q.bind(pattern.clone()).bind(pattern);
+            }
+
+            q = q.bind(limit).bind(offset);
+
+            let emails = q.fetch_all(pool).await?;
+            Ok(emails)
+        }
+    }
+}
+
+pub async fn get_favorite_email_count_by_user_id(
+    pool: &DbPool,
+    user_id: uuid::Uuid,
+    alias_address: Option<String>,
+    query: Option<String>,
+) -> Result<i64, sqlx::Error> {
+    match pool {
+        DbPool::Postgres(pool) => {
+            let count = sqlx::query_scalar::<_, i64>(
+                r#"SELECT (
+                    (SELECT COUNT(*) FROM received_emails e
+                     JOIN aliases a ON e.alias_id = a.id
+                     JOIN domains d ON a.domain_id = d.id
+                     WHERE a.user_id = $1 AND e.thread_id IS NULL AND e.is_favorite = TRUE
+                       AND ($2::TEXT IS NULL OR (a.subdomain || '@' || d.name) = $2)
+                       AND ($3::TEXT IS NULL OR e.subject ILIKE '%' || $3 || '%' OR e.sender_email ILIKE '%' || $3 || '%')
+                    )
+                    +
+                    (SELECT COUNT(*) FROM sent_emails s
+                     JOIN aliases a ON s.from_alias_id = a.id
+                     JOIN domains d ON a.domain_id = d.id
+                     WHERE s.user_id = $1 AND s.is_favorite = TRUE AND s.status != 'draft'::email_status
+                       AND ($2::TEXT IS NULL OR (a.subdomain || '@' || d.name) = $2)
+                       AND ($3::TEXT IS NULL OR s.subject ILIKE '%' || $3 || '%' OR s.to_address ILIKE '%' || $3 || '%')
+                    )
+                ) as total"#,
+            )
+            .bind(user_id)
+            .bind(alias_address)
+            .bind(query)
+            .fetch_one(pool)
+            .await?;
+            Ok(count)
+        }
+        DbPool::Sqlite(pool) => {
+            let mut sql1 = String::from(
+                "SELECT COUNT(*) FROM received_emails e JOIN aliases a ON e.alias_id = a.id JOIN domains d ON a.domain_id = d.id WHERE a.user_id = ? AND e.thread_id IS NULL AND e.is_favorite = 1",
+            );
+            if alias_address.is_some() {
+                sql1.push_str(" AND (a.subdomain || '@' || d.name) = ?");
+            }
+            if query.is_some() {
+                sql1.push_str(" AND (e.subject LIKE ? OR e.sender_email LIKE ?)");
+            }
+
+            let mut q1 = sqlx::query_scalar::<sqlx::Sqlite, i64>(&sql1).bind(user_id);
+            if let Some(alias) = &alias_address {
+                q1 = q1.bind(alias);
+            }
+            if let Some(search) = &query {
+                let pattern = format!("%{}%", search);
+                q1 = q1.bind(pattern.clone()).bind(pattern);
+            }
+            let c1 = q1.fetch_one(pool).await?;
+
+            let mut sql2 = String::from(
+                "SELECT COUNT(*) FROM sent_emails s JOIN aliases a ON s.from_alias_id = a.id JOIN domains d ON a.domain_id = d.id WHERE s.user_id = ? AND s.is_favorite = 1 AND s.status != 'draft'",
+            );
+            if alias_address.is_some() {
+                sql2.push_str(" AND (a.subdomain || '@' || d.name) = ?");
+            }
+            if query.is_some() {
+                sql2.push_str(" AND (s.subject LIKE ? OR s.to_address LIKE ?)");
+            }
+
+            let mut q2 = sqlx::query_scalar::<sqlx::Sqlite, i64>(&sql2).bind(user_id);
+            if let Some(alias) = &alias_address {
+                q2 = q2.bind(alias);
+            }
+            if let Some(search) = &query {
+                let pattern = format!("%{}%", search);
+                q2 = q2.bind(pattern.clone()).bind(pattern);
+            }
+            let c2 = q2.fetch_one(pool).await?;
+
+            Ok(c1 + c2)
         }
     }
 }

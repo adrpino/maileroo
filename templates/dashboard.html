@@ -249,7 +249,8 @@
     }
 
     /* Disable the batch delete button if no individual email checkbox is checked */
-    body:not(:has(.email-checkbox:checked)) #btn-batch-delete {
+    body:not(:has(.email-checkbox:checked)) #btn-batch-delete,
+    body:not(:has(.email-checkbox:checked)) #btn-batch-unread {
         opacity: 0.5;
         pointer-events: none;
         cursor: not-allowed;
@@ -328,7 +329,8 @@
             max-width: none;
         }
 
-        #btn-batch-delete {
+        #btn-batch-delete,
+        #btn-batch-unread {
             width: 100%;
             justify-content: center;
         }
@@ -361,6 +363,20 @@
         tr {
             position: relative;
             display: grid;
+            grid-template-columns: 32px 32px 1fr auto;
+            grid-template-areas:
+                "checkbox star sender date"
+                "checkbox star subject subject";
+            padding: 12px 15px;
+            column-gap: 8px;
+            row-gap: 4px;
+            border-bottom: 1px solid #eee;
+            align-items: center;
+        }
+
+        tr:not(:has(.star-cell)) {
+            position: relative;
+            display: grid;
             grid-template-columns: 36px 1fr auto;
             grid-template-areas:
                 "checkbox sender date"
@@ -384,7 +400,8 @@
         }
 
         /* Checkbox cell - Show on mobile */
-        td:nth-child(1) {
+        td.checkbox-cell,
+        td:has(.email-checkbox) {
             grid-area: checkbox;
             display: flex;
             align-items: center;
@@ -395,8 +412,20 @@
             /* Keep above the row link */
         }
 
+        /* Star cell - Show on mobile */
+        td.star-cell,
+        td:has(.btn-star) {
+            grid-area: star;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 0;
+            position: relative;
+            z-index: 2;
+        }
+
         /* Sender cell */
-        td:nth-child(2) {
+        td.sender-cell {
             grid-area: sender;
             padding: 0 0 2px 0;
             font-weight: 600;
@@ -410,7 +439,8 @@
         /* Subject cell.
            Laid out as a wrapping flex row so the label pills drop onto their own
            line instead of being clipped off the end of the truncated subject. */
-        td:nth-child(3) {
+        td.subject-cell,
+        td:has(.subject-text) {
             grid-area: subject;
             padding: 0;
             font-size: 0.9rem;
@@ -434,7 +464,8 @@
         }
 
         /* Attachment icon must not be squeezed by the subject. */
-        td:nth-child(3)>svg {
+        td.subject-cell > svg,
+        td:has(.subject-text) > svg {
             flex-shrink: 0;
         }
 
@@ -447,7 +478,7 @@
         }
 
         /* Date cell - Show on mobile */
-        td:nth-child(5) {
+        td.date-cell {
             grid-area: date;
             padding: 0;
             font-size: 0.8rem;
@@ -457,9 +488,9 @@
         }
 
         /* Hide forwarded and actions on mobile */
-        td:nth-child(4),
-        td:nth-child(6) {
-            display: none;
+        td.forwarded-cell,
+        td.actions-cell {
+            display: none !important;
         }
 
         /* The empty-state placeholder is a single full-width cell, not a data row.
@@ -471,7 +502,7 @@
         }
 
         tr#no-emails-placeholder td {
-            display: block;
+            display: block !important;
             grid-area: auto;
             width: 100%;
             padding: 48px 24px;
@@ -522,6 +553,7 @@
 
     <div class="emails-controls-container" style="margin-bottom: 15px; display: flex; gap: 15px; border-bottom: 1px solid #e2e8f0; padding-bottom: 10px;">
         <a href="/dashboard?folder=inbox" class="{% if current_folder == "inbox" %}active-tab{% else %}inactive-tab{% endif %}" style="text-decoration: none; font-weight: 600; padding-bottom: 8px;">{{ locale.folder_inbox() }}</a>
+        <a href="/dashboard?folder=favorites" class="{% if current_folder == "favorites" %}active-tab{% else %}inactive-tab{% endif %}" style="text-decoration: none; font-weight: 600; padding-bottom: 8px;">{{ locale.folder_favorites() }}</a>
         {% if can_send_firsthand || is_admin %}
         <a href="/dashboard?folder=sent" class="{% if current_folder == "sent" %}active-tab{% else %}inactive-tab{% endif %}" style="text-decoration: none; font-weight: 600; padding-bottom: 8px;">{{ locale.folder_sent() }}</a>
         <a href="/dashboard?folder=drafts" class="{% if current_folder == "drafts" %}active-tab{% else %}inactive-tab{% endif %}" style="text-decoration: none; font-weight: 600; padding-bottom: 8px;">{{ locale.folder_drafts() }}</a>
@@ -554,6 +586,8 @@
                 {{ locale.sent_emails_title() }}
             {% else if current_folder == "drafts" %}
                 {{ locale.draft_emails_title() }}
+            {% else if current_folder == "favorites" %}
+                {{ locale.favorite_emails_title() }}
             {% else %}
                 {{ locale.recent_emails_title() }}
             {% endif %}
@@ -584,6 +618,14 @@
                 <button type="submit" style="display: none;"></button>
             </form>
 
+            {% if current_folder != "sent" && current_folder != "drafts" %}
+            <button id="btn-batch-unread" type="button" class="btn" style="margin: 0; white-space: nowrap; background-color: #ebf8ff; color: #2c5282; border: 1px solid #bee3f8;"
+                hx-post="/emails/batch-mark-unread" hx-include="#batch-delete-form"
+                hx-target="body">
+                {{ locale.batch_mark_unread_button() }}
+            </button>
+            {% endif %}
+
             <button id="btn-batch-delete" type="button" class="btn btn-delete" style="margin: 0; white-space: nowrap;"
                 hx-post="/emails/batch-delete-confirm" hx-include="#batch-delete-form"
                 hx-target="#maileroo-modal-placeholder">
@@ -601,7 +643,8 @@
                                 onclick="document.querySelectorAll('.email-checkbox').forEach(cb => cb.checked = this.checked)"
                                 style="cursor: pointer;">
                         </th>
-                        {% if current_folder == "inbox" %}
+                        <th style="width: 32px; text-align: center; padding: 0;"></th>
+                        {% if current_folder == "inbox" || current_folder == "favorites" %}
                             <th>{{ locale.table_sender() }}</th>
                             <th>{{ locale.table_subject() }}</th>
                             <th class="desktop-only">{{ locale.table_forwarded() }}</th>
@@ -627,7 +670,7 @@
                     {% include "email_row.html" %}
                     {% else %}
                     <tr id="no-emails-placeholder">
-                        <td colspan="6" style="text-align: center; padding: 60px; color: #718096;">
+                        <td colspan="7" style="text-align: center; padding: 60px; color: #718096;">
                             <div style="font-size: 3rem; margin-bottom: 10px;">✉️</div>
                             {{ locale.no_emails() }}
                         </td>
