@@ -7,16 +7,25 @@ use axum::{
 };
 use axum_extra::extract::Form as ExtraForm;
 use serde::Deserialize;
+use std::collections::HashMap;
 use std::sync::Arc;
 use uuid::Uuid;
 
 use crate::db::attachments::{
     delete_attachments_for_email, get_attachment_by_id, get_attachments_for_email,
 };
-use crate::db::{
-    delete_email_by_id, get_email_by_id, get_email_by_user_id, get_email_count_by_user_id,
+use crate::db::labels::{get_labels_by_user, get_labels_for_email, get_labels_for_emails};
+use crate::db::sent_emails::{
+    EmailStatus, delete_sent_email_by_id, get_sent_email_count_by_user_id,
+    get_sent_emails_by_user_id,
 };
-use crate::web::handlers::ModalTemplate;
+use crate::db::{
+    AnyEmail, batch_set_emails_viewed, delete_email_by_id, get_aliases_by_user_id, get_any_email,
+    get_domain_count, get_email_by_id, get_email_by_user_id, get_email_count_by_user_id,
+    get_favorite_email_count_by_user_id, get_favorite_emails_by_user_id, set_email_viewed,
+    toggle_email_favorite,
+};
+use crate::web::handlers::{EmailRowTemplate, ModalTemplate};
 use crate::web::i18n::{Locale, Messages};
 use crate::web::{AppState, AuthenticatedUser, ThreadMessage};
 
@@ -40,6 +49,7 @@ pub struct DisplayEmail {
     pub status: Option<crate::db::sent_emails::EmailStatus>,
     pub has_attachments: bool,
     pub labels: Vec<crate::db::labels::Label>,
+    pub is_favorite: bool,
 }
 
 #[derive(Template)]
@@ -91,12 +101,12 @@ pub async fn dashboard_handler(
 
     let (emails, total_emails) = if current_folder == "sent" || current_folder == "drafts" {
         let status_filter = if current_folder == "drafts" {
-            crate::db::sent_emails::EmailStatus::Draft
+            EmailStatus::Draft
         } else {
-            crate::db::sent_emails::EmailStatus::Sent
+            EmailStatus::Sent
         };
 
-        let sent_emails = crate::db::sent_emails::get_sent_emails_by_user_id(
+        let sent_emails = get_sent_emails_by_user_id(
             &state.db,
             user.user_id,
             status_filter.clone(),
@@ -108,7 +118,7 @@ pub async fn dashboard_handler(
         .await
         .unwrap_or_default();
 
-        let count = crate::db::sent_emails::get_sent_email_count_by_user_id(
+        let count = get_sent_email_count_by_user_id(
             &state.db,
             user.user_id,
             status_filter,
@@ -131,6 +141,73 @@ pub async fn dashboard_handler(
                 status: Some(email.status),
                 has_attachments: email.has_attachments,
                 labels: Vec::new(),
+                is_favorite: email.is_favorite,
+            })
+            .collect();
+
+        (display_emails, count)
+    } else if current_folder == "favorites" {
+        let fav_rows = match get_favorite_emails_by_user_id(
+            &state.db,
+            user.user_id,
+            page_size,
+            offset,
+            alias_filter.clone(),
+            query_filter.clone(),
+        )
+        .await
+        {
+            Ok(rows) => rows,
+            Err(e) => {
+                tracing::error!("Database error fetching favorites: {}", e);
+                return (StatusCode::INTERNAL_SERVER_ERROR, "Database error").into_response();
+            }
+        };
+
+        let count = get_favorite_email_count_by_user_id(
+            &state.db,
+            user.user_id,
+            alias_filter.clone(),
+            query_filter.clone(),
+        )
+        .await
+        .unwrap_or(0);
+
+        let received_ids: Vec<Uuid> = fav_rows
+            .iter()
+            .filter(|e| !e.is_sent_folder)
+            .map(|e| e.id)
+            .collect();
+        let mut labels_map = get_labels_for_emails(&state.db, &received_ids)
+            .await
+            .unwrap_or_default();
+
+        let display_emails = fav_rows
+            .into_iter()
+            .map(|email| {
+                let labels = labels_map.remove(&email.id).unwrap_or_default();
+                let status = email
+                    .outbound_status
+                    .and_then(|s| match s.to_lowercase().as_str() {
+                        "draft" => Some(EmailStatus::Draft),
+                        "sending" => Some(EmailStatus::Sending),
+                        "sent" => Some(EmailStatus::Sent),
+                        "failed" => Some(EmailStatus::Failed),
+                        _ => None,
+                    });
+                DisplayEmail {
+                    id: email.id,
+                    alias_address: email.alias_address,
+                    correspondent_email: email.correspondent_email,
+                    subject: email.subject,
+                    date: email.date,
+                    is_sent_folder: email.is_sent_folder,
+                    is_viewed: email.is_viewed,
+                    status,
+                    has_attachments: email.has_attachments,
+                    labels,
+                    is_favorite: email.is_favorite,
+                }
             })
             .collect();
 
@@ -167,8 +244,8 @@ pub async fn dashboard_handler(
             Err(_) => 0,
         };
 
-        let email_ids: Vec<uuid::Uuid> = inbox_emails.iter().map(|e| e.id).collect();
-        let mut labels_map = crate::db::labels::get_labels_for_emails(&state.db, &email_ids)
+        let email_ids: Vec<Uuid> = inbox_emails.iter().map(|e| e.id).collect();
+        let mut labels_map = get_labels_for_emails(&state.db, &email_ids)
             .await
             .unwrap_or_default();
 
@@ -187,6 +264,7 @@ pub async fn dashboard_handler(
                     status: None,
                     has_attachments: email.has_attachments,
                     labels,
+                    is_favorite: email.is_favorite,
                 }
             })
             .collect();
@@ -196,18 +274,18 @@ pub async fn dashboard_handler(
 
     let total_pages = calculate_total_pages(total_emails, page_size);
 
-    let user_aliases = match crate::db::get_aliases_by_user_id(&state.db, user.user_id).await {
+    let user_aliases = match get_aliases_by_user_id(&state.db, user.user_id).await {
         Ok(aliases) => aliases,
         Err(_) => vec![],
     };
 
-    let user_labels = crate::db::labels::get_labels_by_user(&state.db, user.user_id)
+    let user_labels = get_labels_by_user(&state.db, user.user_id)
         .await
         .unwrap_or_default();
 
     let alias_count = user_aliases.len() as i64;
 
-    let domain_count = match crate::db::get_domain_count(&state.db).await {
+    let domain_count = match get_domain_count(&state.db).await {
         Ok(count) => count,
         Err(_) => 0,
     };
@@ -265,7 +343,7 @@ async fn perform_smart_delete(
         let deleted = if delete_email_by_id(&state.db, email_id, user_id).await? {
             true
         } else {
-            crate::db::sent_emails::delete_sent_email_by_id(&state.db, email_id, user_id).await?
+            delete_sent_email_by_id(&state.db, email_id, user_id).await?
         };
 
         if deleted {
@@ -365,6 +443,131 @@ pub async fn batch_delete_emails_confirm_handler(
     .into_response()
 }
 
+pub async fn mark_email_unread_handler(
+    user: AuthenticatedUser,
+    Path(email_id): Path<Uuid>,
+    State(state): State<Arc<AppState>>,
+) -> Response {
+    match set_email_viewed(&state.db, email_id, user.user_id, false).await {
+        Ok(_) => Response::builder()
+            .header("HX-Redirect", "/dashboard")
+            .status(StatusCode::OK)
+            .body(Body::empty())
+            .unwrap(),
+        Err(e) => {
+            tracing::error!("Error marking email unread: {}", e);
+            (StatusCode::INTERNAL_SERVER_ERROR, "Database error").into_response()
+        }
+    }
+}
+
+pub async fn batch_mark_unread_handler(
+    user: AuthenticatedUser,
+    State(state): State<Arc<AppState>>,
+    ExtraForm(payload): ExtraForm<BatchDeleteEmailsRequest>,
+) -> Response {
+    if !payload.email_ids.is_empty()
+        && let Err(e) =
+            batch_set_emails_viewed(&state.db, &payload.email_ids, user.user_id, false).await
+    {
+        tracing::error!("Error batch marking emails unread: {}", e);
+        return (StatusCode::INTERNAL_SERVER_ERROR, "Database error").into_response();
+    }
+    Response::builder()
+        .header("HX-Redirect", "/dashboard")
+        .status(StatusCode::OK)
+        .body(Body::empty())
+        .unwrap()
+}
+
+pub async fn toggle_favorite_handler(
+    locale: Locale,
+    user: AuthenticatedUser,
+    Path(email_id): Path<Uuid>,
+    Query(params): Query<HashMap<String, String>>,
+    State(state): State<Arc<AppState>>,
+) -> Response {
+    let new_fav = match toggle_email_favorite(&state.db, email_id, user.user_id).await {
+        Ok(Some(fav)) => fav,
+        Ok(None) => return StatusCode::NOT_FOUND.into_response(),
+        Err(e) => {
+            tracing::error!("Failed to toggle favorite: {}", e);
+            return (StatusCode::INTERNAL_SERVER_ERROR, "Database error").into_response();
+        }
+    };
+
+    if params.get("context").map(|s| s.as_str()) == Some("detail") {
+        let (star_icon, label, style_color) = if new_fav {
+            ("★", locale.unfavorite_button(), "#d69e2e")
+        } else {
+            ("☆", locale.favorite_button(), "#718096")
+        };
+        let html = format!(
+            r##"<button id="favorite-btn-{email_id}" class="btn-favorite" hx-post="/emails/{email_id}/toggle-favorite?context=detail" hx-target="#favorite-btn-{email_id}" hx-swap="outerHTML" style="background-color: #f8f9fa; color: #333; padding: 6px 12px; border-radius: 4px; border: 1px solid #ddd; cursor: pointer; font-size: 0.85rem; display: inline-flex; align-items: center; gap: 5px;"><span style="color: {style_color}; font-size: 1rem;">{star_icon}</span> {label}</button>"##
+        );
+        return Html(html).into_response();
+    }
+
+    let email_opt = match get_any_email(&state.db, email_id, user.user_id).await {
+        Ok(e) => e,
+        Err(e) => {
+            tracing::error!("Failed to fetch email after toggling favorite: {}", e);
+            return (StatusCode::INTERNAL_SERVER_ERROR, "Database error").into_response();
+        }
+    };
+
+    let Some(email) = email_opt else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+
+    let display_email = match email {
+        AnyEmail::Received(e) => {
+            let labels = get_labels_for_email(&state.db, email_id)
+                .await
+                .unwrap_or_default();
+            DisplayEmail {
+                id: e.id,
+                alias_address: e.alias_address.unwrap_or_default(),
+                correspondent_email: e.sender_email,
+                subject: e.subject,
+                date: e.received_at,
+                is_sent_folder: false,
+                is_viewed: e.viewed,
+                status: None,
+                has_attachments: e.has_attachments,
+                labels,
+                is_favorite: e.is_favorite,
+            }
+        }
+        AnyEmail::Sent(e) => DisplayEmail {
+            id: e.id,
+            alias_address: e.alias_address,
+            correspondent_email: e.to_address,
+            subject: e.subject,
+            date: e.updated_at,
+            is_sent_folder: true,
+            is_viewed: true,
+            status: Some(e.status),
+            has_attachments: e.has_attachments,
+            labels: Vec::new(),
+            is_favorite: e.is_favorite,
+        },
+    };
+
+    let template = EmailRowTemplate {
+        email: display_email,
+        locale,
+    };
+    match askama::Template::render(&template) {
+        Ok(html) => Html(html).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Render error: {e}"),
+        )
+            .into_response(),
+    }
+}
+
 pub async fn delete_email_confirm_handler(
     locale: Locale,
     user: AuthenticatedUser,
@@ -429,6 +632,7 @@ pub struct EmailDetailTemplate {
     pub attachments: Vec<crate::db::attachments::AttachmentRow>,
     pub labels: Vec<crate::db::labels::Label>,
     pub all_user_labels: Vec<crate::db::labels::Label>,
+    pub is_favorite: bool,
 }
 
 impl IntoResponse for EmailDetailTemplate {
@@ -473,6 +677,7 @@ pub async fn dashboard_sse_handler(
                             status: None,
                             has_attachments: email.has_attachments,
                             labels,
+                            is_favorite: email.is_favorite,
                         };
                         let template = crate::web::handlers::EmailRowTemplate { email: display_email, locale: locale.clone() };
                         if let Ok(html) = askama::Template::render(&template) {
@@ -680,6 +885,7 @@ mod tests {
             status: None,
             has_attachments: false,
             labels: Vec::new(),
+            is_favorite: false,
         };
 
         let template = crate::web::handlers::EmailRowTemplate {
@@ -744,6 +950,7 @@ mod tests {
             status: None,
             has_attachments: false,
             labels,
+            is_favorite: false,
         };
 
         let template = crate::web::handlers::EmailRowTemplate {
@@ -781,6 +988,7 @@ mod tests {
             sent_at: Some(OffsetDateTime::now_utc()),
             alias_address: "myalias@domain.com".to_string(),
             has_attachments: false,
+            is_favorite: false,
         };
 
         let display_email = DisplayEmail {
@@ -794,6 +1002,7 @@ mod tests {
             status: Some(sent_row.status.clone()),
             has_attachments: false,
             labels: Vec::new(),
+            is_favorite: sent_row.is_favorite,
         };
 
         assert_eq!(display_email.is_sent_folder, true);
@@ -821,6 +1030,7 @@ mod tests {
             attachments: vec![],
             labels: vec![],
             all_user_labels: vec![],
+            is_favorite: false,
         };
 
         assert!(template.is_outbound);
@@ -888,6 +1098,7 @@ mod tests {
             attachments,
             labels: vec![],
             all_user_labels: vec![],
+            is_favorite: false,
         };
 
         let rendered = template.render().unwrap();

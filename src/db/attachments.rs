@@ -99,7 +99,7 @@ pub async fn insert_email_with_attachments(
         DbPool::Postgres(pool) => {
             let mut tx = pool.begin().await?;
             if let Some(root_id) = thread_id {
-                sqlx::query("UPDATE received_emails SET last_activity_at = $1 WHERE id = $2")
+                sqlx::query("UPDATE received_emails SET last_activity_at = $1, viewed = FALSE WHERE id = $2")
                     .bind(received_at_val)
                     .bind(root_id)
                     .execute(&mut *tx)
@@ -137,7 +137,8 @@ pub async fn insert_email_with_attachments(
                     i.forwarded as forwarded,
                     i.message_id,
                     i.thread_id,
-                    i.has_attachments
+                    i.has_attachments,
+                    i.is_favorite
                 FROM inserted i
                 JOIN aliases a ON i.alias_id = a.id
                 JOIN domains d ON a.domain_id = d.id"#,
@@ -179,11 +180,13 @@ pub async fn insert_email_with_attachments(
         DbPool::Sqlite(pool) => {
             let mut tx = pool.begin().await?;
             if let Some(root_id) = thread_id {
-                sqlx::query("UPDATE received_emails SET last_activity_at = ? WHERE id = ?")
-                    .bind(received_at_val)
-                    .bind(root_id)
-                    .execute(&mut *tx)
-                    .await?;
+                sqlx::query(
+                    "UPDATE received_emails SET last_activity_at = ?, viewed = 0 WHERE id = ?",
+                )
+                .bind(received_at_val)
+                .bind(root_id)
+                .execute(&mut *tx)
+                .await?;
             }
 
             sqlx::query(
@@ -250,7 +253,8 @@ pub async fn insert_email_with_attachments(
                     e.forwarded,
                     e.message_id,
                     e.thread_id,
-                    e.has_attachments
+                    e.has_attachments,
+                    e.is_favorite
                 FROM received_emails e
                 JOIN aliases a ON e.alias_id = a.id
                 JOIN domains d ON a.domain_id = d.id

@@ -8,3 +8,4 @@ storage/
 certs_prod/
 .vscode/
 e2e-server.log
+PR_DESCRIPTION.md

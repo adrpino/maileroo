@@ -624,10 +624,10 @@ impl SmtpSession {
                         }
                     }
 
-                    // Send notification to SSE subscribers
+                    // Send notification to SSE subscribers (notify root thread for replies)
                     let _ = self.tx.send(crate::web::DashboardEvent::NewEmail {
                         user_id: email.user_id,
-                        email_id: email.id,
+                        email_id: email.thread_id.unwrap_or(email.id),
                     });
 
                     // Trigger Forwarding if enabled

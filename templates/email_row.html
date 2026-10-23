@@ -1,11 +1,16 @@
 <tr id="email-{{ email.id }}" class="{% if !email.is_viewed %}unread{% endif %}">
-    <td style="width: 40px; text-align: center;">
+    <td class="checkbox-cell" style="width: 40px; text-align: center;">
         <input type="checkbox" name="email_ids" value="{{ email.id }}" class="email-checkbox" style="cursor: pointer;">
+    </td>
+    <td class="star-cell" style="width: 32px; text-align: center; padding: 0 4px;">
+        <button type="button" class="btn-star" hx-post="/emails/{{ email.id }}/toggle-favorite" hx-target="#email-{{ email.id }}" hx-swap="outerHTML" style="background: none; border: none; cursor: pointer; font-size: 1.15rem; line-height: 1; padding: 4px; color: {% if email.is_favorite %}#d69e2e{% else %}#cbd5e0{% endif %}; position: relative; z-index: 2;" title="{% if email.is_favorite %}{{ locale.unfavorite_button() }}{% else %}{{ locale.favorite_button() }}{% endif %}">
+            {% if email.is_favorite %}★{% else %}☆{% endif %}
+        </button>
     </td>
     <td class="sender-cell">
         {{ email.correspondent_email }}
     </td>
-    <td>
+    <td class="subject-cell">
         <!-- This link is only active on mobile to make the whole row clickable -->
         {% match email.status %}
             {% when Some with (status) %}
@@ -60,7 +65,7 @@
         {% endif %}
     </td>
     <td class="date-cell">{{ email.date.to_string()[..16] }}</td>
-    <td style="text-align: right; white-space: nowrap;">
+    <td class="actions-cell" style="text-align: right; white-space: nowrap;">
         {% match email.status %}
             {% when Some with (status) %}
                 {% if status.to_string() == "Draft" %}

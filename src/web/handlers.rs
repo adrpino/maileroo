@@ -126,6 +126,7 @@ pub struct EmailDetailTemplate {
     pub attachments: Vec<AttachmentRow>,
     pub labels: Vec<crate::db::labels::Label>,
     pub all_user_labels: Vec<crate::db::labels::Label>,
+    pub is_favorite: bool,
 }
 impl IntoResponse for EmailDetailTemplate {
     fn into_response(self) -> Response {
