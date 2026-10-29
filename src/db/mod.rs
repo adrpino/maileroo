@@ -722,9 +722,14 @@ pub async fn find_thread_id_by_references(
                 return Ok(Some(id));
             }
 
-            // 2. Check if any reference matches one of our outbound replies
+            // 2. Check if any reference matches one of our outbound replies.
+            // The reply may have been sent from a child email, so resolve to its root.
             let outbound_root_id = sqlx::query_scalar::<_, uuid::Uuid>(
-                r#"SELECT email_id FROM email_replies WHERE message_id = ANY($1) LIMIT 1"#,
+                r#"SELECT COALESCE(e.thread_id, e.id)
+                   FROM email_replies r
+                   JOIN received_emails e ON e.id = r.email_id
+                   WHERE r.message_id = ANY($1)
+                   LIMIT 1"#,
             )
             .bind(references)
             .fetch_optional(pool)
@@ -754,9 +759,9 @@ pub async fn find_thread_id_by_references(
                 return Ok(Some(id));
             }
 
-            // 2. Check email_replies
+            // 2. Check email_replies, resolving to the root in case the reply was sent from a child email
             let sql_reply = format!(
-                "SELECT email_id FROM email_replies WHERE message_id IN ({}) LIMIT 1",
+                "SELECT COALESCE(e.thread_id, e.id) FROM email_replies r JOIN received_emails e ON e.id = r.email_id WHERE r.message_id IN ({}) LIMIT 1",
                 placeholders
             );
 

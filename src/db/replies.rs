@@ -23,12 +23,15 @@ pub async fn insert_reply(
 
     match pool {
         DbPool::Postgres(pool) => {
-            // Update the last_activity_at of the parent email
-            sqlx::query("UPDATE received_emails SET last_activity_at = $1 WHERE id = $2")
-                .bind(now)
-                .bind(email_id)
-                .execute(pool)
-                .await?;
+            // Update the last_activity_at of the thread root (the reply may target a child email)
+            sqlx::query(
+                "UPDATE received_emails SET last_activity_at = $1
+                 WHERE id = (SELECT COALESCE(thread_id, id) FROM received_emails WHERE id = $2)",
+            )
+            .bind(now)
+            .bind(email_id)
+            .execute(pool)
+            .await?;
 
             sqlx::query_as::<_, EmailReply>(
                 r#"INSERT INTO email_replies (id, email_id, body_text, sent_at, message_id, body_key)
@@ -45,12 +48,15 @@ pub async fn insert_reply(
             .await
         }
         DbPool::Sqlite(pool) => {
-            // Update the last_activity_at of the parent email
-            sqlx::query("UPDATE received_emails SET last_activity_at = ? WHERE id = ?")
-                .bind(now)
-                .bind(email_id)
-                .execute(pool)
-                .await?;
+            // Update the last_activity_at of the thread root (the reply may target a child email)
+            sqlx::query(
+                "UPDATE received_emails SET last_activity_at = ?
+                 WHERE id = (SELECT COALESCE(thread_id, id) FROM received_emails WHERE id = ?)",
+            )
+            .bind(now)
+            .bind(email_id)
+            .execute(pool)
+            .await?;
 
             let id = Uuid::new_v4();
             sqlx::query_as::<sqlx::Sqlite, EmailReply>(
