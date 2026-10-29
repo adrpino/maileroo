@@ -5,6 +5,7 @@ mod tests {
         aliases::{get_taken_subdomains, insert_alias, resolve_recipient_alias},
         api_keys::{get_api_keys, insert_api_key},
         find_thread_id_by_references, get_child_emails, insert_domain, insert_email,
+        replies::insert_reply,
         reply_mappings::{get_or_create_reply_mapping, get_reply_mapping_by_token},
         sent_emails::{EmailStatus, get_sent_emails_by_user_id, insert_sent_email},
         users::{get_user_by_id, insert_user, update_last_login},
@@ -250,5 +251,67 @@ mod tests {
         let children = get_child_emails(&db, root_email.id).await.unwrap();
         assert_eq!(children.len(), 1);
         assert_eq!(children[0].thread_id, Some(root_email.id));
+    }
+
+    #[tokio::test]
+    async fn test_sqlite_thread_id_resolves_to_root_via_reply_on_child() {
+        let db = setup_sqlite_in_memory_db().await;
+
+        let user = insert_user(&db, "nested@test.com", "hash").await.unwrap();
+
+        let domain = insert_domain(&db, &"nested-domain.com".to_string())
+            .await
+            .unwrap();
+
+        let alias = insert_alias(&db, user.id, domain.id, "nested", "user@gmail.com", true)
+            .await
+            .unwrap();
+
+        // 1. Root email and a child email on the same thread
+        let root_email = insert_email(
+            &db,
+            alias.id,
+            "sender@external.com",
+            "Thread subject",
+            Uuid::new_v4(),
+            None,
+            Some("<root@external.com>".to_string()),
+            None,
+        )
+        .await
+        .unwrap();
+
+        let child_email = insert_email(
+            &db,
+            alias.id,
+            "sender@external.com",
+            "Re: Thread subject",
+            Uuid::new_v4(),
+            None,
+            Some("<child@external.com>".to_string()),
+            Some(root_email.id),
+        )
+        .await
+        .unwrap();
+
+        // 2. Outbound reply sent while viewing the child email
+        let reply_msg_id = "<outbound-reply@example.com>";
+        insert_reply(
+            &db,
+            child_email.id,
+            "Reply body",
+            Some(reply_msg_id.to_string()),
+            None,
+        )
+        .await
+        .unwrap();
+
+        // 3. An incoming answer referencing only our reply must land on the root, not the child
+        let references = vec![reply_msg_id.to_string()];
+        let found_id = find_thread_id_by_references(&db, &references)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(found_id, root_email.id);
     }
 }
