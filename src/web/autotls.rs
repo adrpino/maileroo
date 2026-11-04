@@ -19,7 +19,7 @@ pub fn resolve_acme_cert_path(
     let mut hasher = Sha256::new();
     // domains are null-terminated in the rustls-acme SHA256 context
     hasher.update(domain.as_bytes());
-    hasher.update(&[0]);
+    hasher.update([0]);
     // followed by the ACME directory URL
     hasher.update(acme_directory.as_bytes());
     let result = hasher.finalize();
@@ -32,9 +32,11 @@ pub fn resolve_acme_cert_path(
 /// This handles Let's Encrypt HTTP-01 challenges and redirects standard
 /// HTTP requests to HTTPS.
 pub async fn run_auto_tls_web_server(app: Router, auto_tls: &AutoTlsConfig) -> anyhow::Result<()> {
-    println!(
-        "🔒 Starting Native Auto-TLS for domain {} (HTTP: {}, HTTPS: {})",
-        auto_tls.domain, auto_tls.http_port, auto_tls.https_port
+    tracing::info!(
+        "Starting Native Auto-TLS for domain {} (HTTP: {}, HTTPS: {})",
+        auto_tls.domain,
+        auto_tls.http_port,
+        auto_tls.https_port
     );
 
     // 1. Configure the ACME engine

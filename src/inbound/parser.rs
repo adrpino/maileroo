@@ -41,19 +41,19 @@ pub fn extract_full_metadata(
     let message_id = message
         .as_ref()
         .and_then(|m| m.message_id())
-        .map(|id| crate::outbound::mime::format_message_id(id));
+        .map(crate::outbound::mime::format_message_id);
 
     let in_reply_to = message
         .as_ref()
         .and_then(|m| m.in_reply_to().as_text())
-        .map(|id| crate::outbound::mime::format_message_id(id));
+        .map(crate::outbound::mime::format_message_id);
 
     let references = message
         .as_ref()
         .and_then(|m| m.references().as_text())
         .map(|r| {
             r.split_whitespace()
-                .map(|id| crate::outbound::mime::format_message_id(id))
+                .map(crate::outbound::mime::format_message_id)
                 .collect()
         })
         .unwrap_or_default();

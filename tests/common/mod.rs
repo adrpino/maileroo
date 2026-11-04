@@ -74,43 +74,43 @@ where
     }
 
     // --- 2. RUN ON POSTGRES (IF AVAILABLE) ---
-    if let Ok(pg_url) = std::env::var("TEST_DATABASE_URL") {
-        if !pg_url.trim().is_empty() {
-            let (admin_url, db_name, unique_db_url) = get_admin_and_unique_db_urls(&pg_url);
+    if let Ok(pg_url) = std::env::var("TEST_DATABASE_URL")
+        && !pg_url.trim().is_empty()
+    {
+        let (admin_url, db_name, unique_db_url) = get_admin_and_unique_db_urls(&pg_url);
 
-            // Connect to default administrative database to create our unique isolated test database
-            let admin_pool = PgPool::connect(&admin_url).await.unwrap();
-            let create_query = format!("CREATE DATABASE {};", db_name);
-            sqlx::query(&create_query)
-                .execute(&admin_pool)
-                .await
-                .unwrap();
-            admin_pool.close().await;
+        // Connect to default administrative database to create our unique isolated test database
+        let admin_pool = PgPool::connect(&admin_url).await.unwrap();
+        let create_query = format!("CREATE DATABASE {};", db_name);
+        sqlx::query(&create_query)
+            .execute(&admin_pool)
+            .await
+            .unwrap();
+        admin_pool.close().await;
 
-            // Connect to the unique test database and run migrations
-            let unique_pool = PgPool::connect(&unique_db_url).await.unwrap();
-            let db = DbPool::Postgres(unique_pool.clone());
-            maileroo::db::run_migrations(&db).await.unwrap();
+        // Connect to the unique test database and run migrations
+        let unique_pool = PgPool::connect(&unique_db_url).await.unwrap();
+        let db = DbPool::Postgres(unique_pool.clone());
+        maileroo::db::run_migrations(&db).await.unwrap();
 
-            // Run the test logic catching any panics to guarantee cleanup
-            use futures_util::FutureExt;
-            let test_result = std::panic::AssertUnwindSafe(test_fn(db))
-                .catch_unwind()
-                .await;
+        // Run the test logic catching any panics to guarantee cleanup
+        use futures_util::FutureExt;
+        let test_result = std::panic::AssertUnwindSafe(test_fn(db))
+            .catch_unwind()
+            .await;
 
-            // Explicitly close the connection pool so that Postgres releases any locks before dropping
-            unique_pool.close().await;
+        // Explicitly close the connection pool so that Postgres releases any locks before dropping
+        unique_pool.close().await;
 
-            // Connect back to default administrative database to drop our unique test database
-            let cleanup_pool = PgPool::connect(&admin_url).await.unwrap();
-            let drop_query = format!("DROP DATABASE IF EXISTS {} WITH (FORCE);", db_name);
-            let _ = sqlx::query(&drop_query).execute(&cleanup_pool).await;
-            cleanup_pool.close().await;
+        // Connect back to default administrative database to drop our unique test database
+        let cleanup_pool = PgPool::connect(&admin_url).await.unwrap();
+        let drop_query = format!("DROP DATABASE IF EXISTS {} WITH (FORCE);", db_name);
+        let _ = sqlx::query(&drop_query).execute(&cleanup_pool).await;
+        cleanup_pool.close().await;
 
-            // If the test panics, resume the unwind to mark the test as failed
-            if let Err(payload) = test_result {
-                std::panic::resume_unwind(payload);
-            }
+        // If the test panics, resume the unwind to mark the test as failed
+        if let Err(payload) = test_result {
+            std::panic::resume_unwind(payload);
         }
     }
 }
@@ -379,6 +379,7 @@ impl FakeSmtpSink {
             port: self.addr.port(),
             user: "test-user".to_string(),
             pass: "test-pass".to_string(),
+            allow_plaintext_auth: true,
         }
     }
 }

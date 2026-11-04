@@ -80,6 +80,7 @@ pub async fn get_attachment_by_id(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn insert_email_with_attachments(
     pool: &DbPool,
     alias_id: Uuid,

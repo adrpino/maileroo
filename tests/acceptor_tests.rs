@@ -72,7 +72,7 @@ async fn test_hot_reload_acceptor_lazy_loading_and_rejection() {
             local_addr.ip(),
             rate_limiter.clone(),
             blocklist.clone(),
-            limits.clone(),
+            limits,
         );
 
         // Run the session handler (it will process the command and drop)
@@ -113,7 +113,7 @@ async fn test_hot_reload_acceptor_lazy_loading_and_rejection() {
             local_addr.ip(),
             rate_limiter.clone(),
             blocklist.clone(),
-            limits.clone(),
+            limits,
         );
 
         let _ = session_no_tls.handle().await;
@@ -179,7 +179,7 @@ async fn test_hot_reload_acceptor_lazy_loading_and_rejection() {
             local_addr.ip(),
             rate_limiter.clone(),
             blocklist.clone(),
-            limits.clone(),
+            limits,
         );
 
         // Spawn session in background so it can do the actual handshake

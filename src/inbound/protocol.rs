@@ -122,9 +122,9 @@ impl SmartBodyBuffer {
     }
 
     pub fn append(&mut self, line_with_newline: &str) -> Result<(), std::io::Error> {
-        let content = if line_with_newline.starts_with('.') {
+        let content = if let Some(stripped) = line_with_newline.strip_prefix('.') {
             // Dot un-stuffing: remove the first dot
-            &line_with_newline[1..]
+            stripped
         } else {
             line_with_newline
         };
@@ -169,6 +169,10 @@ impl SmartBodyBuffer {
         self.bytes_written
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.bytes_written == 0
+    }
+
     pub fn extract_full_metadata(
         &self,
         envelope_sender: &str,
@@ -200,10 +204,10 @@ impl SmartBodyBuffer {
             } => {
                 std::io::Write::flush(&mut writer)?;
                 temp_file.persist(dest_path).map_err(|e| {
-                    std::io::Error::new(
-                        std::io::ErrorKind::Other,
-                        format!("Failed to persist temp file to final destination: {}", e),
-                    )
+                    std::io::Error::other(format!(
+                        "Failed to persist temp file to final destination: {}",
+                        e
+                    ))
                 })?;
                 Ok(())
             }
@@ -270,6 +274,7 @@ impl SmtpSession {
         })
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         socket: TcpStream,
         tls_acceptor: Option<HotReloadAcceptor>,
@@ -584,10 +589,10 @@ impl SmtpSession {
 
             // 3. Thread detection
             let mut refs = metadata.references.clone();
-            if let Some(ref in_reply_to) = metadata.in_reply_to {
-                if !refs.contains(in_reply_to) {
-                    refs.push(in_reply_to.clone());
-                }
+            if let Some(ref in_reply_to) = metadata.in_reply_to
+                && !refs.contains(in_reply_to)
+            {
+                refs.push(in_reply_to.clone());
             }
 
             let thread_id = crate::db::find_thread_id_by_references(&self.db_pool, &refs)
@@ -616,12 +621,10 @@ impl SmtpSession {
                         .filter_engine
                         .evaluate(&self.db_pool, email.user_id, &raw_bytes)
                         .await
+                        && !matched_label_ids.is_empty()
                     {
-                        if !matched_label_ids.is_empty() {
-                            let _ =
-                                assign_labels_to_email(&self.db_pool, email.id, &matched_label_ids)
-                                    .await;
-                        }
+                        let _ = assign_labels_to_email(&self.db_pool, email.id, &matched_label_ids)
+                            .await;
                     }
 
                     // Send notification to SSE subscribers (notify root thread for replies)

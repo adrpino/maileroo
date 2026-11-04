@@ -47,30 +47,24 @@ pub fn csrf_clear_cookie_header() -> String {
 
 /// Establishes an authenticated session for `user` and returns the fresh CSRF token.
 ///
-/// Every path that logs a user in must go through this function. It caches the user
-/// flags in the session and, critically, issues the CSRF token that `AuthenticatedUser`
-/// requires on every state-changing request. A session created without one leaves the
-/// user able to browse but unable to POST anything until they log in again.
+/// Every path that logs a user in must go through this function. It cycles the session ID,
+/// stores `user_id`, and issues the CSRF token that `AuthenticatedUser` requires on every
+/// state-changing request. User permission flags are loaded fresh from the database on each
+/// request so administrative changes take effect immediately.
 ///
 /// The caller is responsible for attaching [`csrf_cookie_header`] to the response.
 pub async fn establish_session(session: &Session, user: &User) -> String {
+    let _ = session.cycle_id().await;
+
     let csrf_token = Uuid::new_v4().to_string();
 
     let _ = session.insert("user_id", user.id).await;
-    let _ = session.insert("is_admin", user.is_admin).await;
-    let _ = session
-        .insert("bypass_alias_limit", user.bypass_alias_limit)
-        .await;
-    let _ = session
-        .insert("can_send_firsthand", user.can_send_firsthand)
-        .await;
-    let _ = session.insert("user_data_loaded", true).await;
     let _ = session.insert("csrf_token", &csrf_token).await;
 
     tracing::info!(
         user_id = %user.id,
         is_admin = user.is_admin,
-        "Session established; CSRF token issued"
+        "Session established; session ID cycled and CSRF token issued"
     );
 
     csrf_token

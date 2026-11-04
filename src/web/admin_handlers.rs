@@ -1,5 +1,5 @@
 use crate::web::i18n::{Locale, Messages};
-use crate::web::{AdminUser, AppState};
+use crate::web::{AdminUser, AppState, impl_into_response_for_template};
 use askama::Template;
 use axum::http::StatusCode;
 use axum::{
@@ -17,28 +17,16 @@ pub struct AdminUsersTemplate {
     pub is_admin: bool,
 }
 
-impl IntoResponse for AdminUsersTemplate {
-    fn into_response(self) -> axum::response::Response {
-        match self.render() {
-            Ok(html) => Html(html).into_response(),
-            Err(err) => (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Template rendering error: {}", err),
-            )
-                .into_response(),
-        }
-    }
-}
+impl_into_response_for_template!(AdminUsersTemplate);
 
 pub async fn admin_users_handler(
     locale: Locale,
     user: AdminUser,
     State(state): State<Arc<AppState>>,
 ) -> impl IntoResponse {
-    let users = match crate::db::get_all_users_with_stats(&state.db).await {
-        Ok(u) => u,
-        Err(_) => vec![],
-    };
+    let users = crate::db::get_all_users_with_stats(&state.db)
+        .await
+        .unwrap_or_default();
 
     AdminUsersTemplate {
         users,

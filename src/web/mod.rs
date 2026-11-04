@@ -16,21 +16,47 @@ pub mod replies;
 pub mod send_email;
 pub mod session;
 
-use crate::db::DbPool;
+use crate::config::get_config;
+use crate::db::{DbPool, get_user_by_id};
 use axum::extract::{DefaultBodyLimit, FromRequestParts, State};
 use axum::{
     Json, Router,
     body::Body,
     extract::Path,
     http::{StatusCode, request::Parts},
-    response::{IntoResponse, Response},
+    response::{Html, IntoResponse, Response},
     routing::{delete, get, post},
 };
 use send_email::MAX_UPLOAD_REQUEST_BYTES;
 use serde_json::{Value, json};
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 use uuid::Uuid;
+
+/// Renders an Askama template into an HTML response, logging internal rendering
+/// errors instead of exposing them to the client.
+pub fn render_template<T: askama::Template>(template: &T) -> Response {
+    match template.render() {
+        Ok(html) => Html(html).into_response(),
+        Err(err) => {
+            tracing::error!("Failed to render template: {}", err);
+            (StatusCode::INTERNAL_SERVER_ERROR, "Internal server error").into_response()
+        }
+    }
+}
+
+macro_rules! impl_into_response_for_template {
+    ($($ty:ty),+ $(,)?) => {
+        $(
+            impl axum::response::IntoResponse for $ty {
+                fn into_response(self) -> axum::response::Response {
+                    $crate::web::render_template(&self)
+                }
+            }
+        )+
+    };
+}
+pub(crate) use impl_into_response_for_template;
 
 /// Global configuration for session and CSRF cookie expiration (7 days in seconds).
 pub const SESSION_MAX_AGE_SECONDS: i64 = 7 * 24 * 60 * 60;
@@ -160,7 +186,19 @@ impl axum::response::IntoResponse for AuthError {
     }
 }
 
-/// Pure function to validate a CSRF token.
+/// Pure function for constant-time byte slice equality comparison.
+pub fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut diff = 0u8;
+    for (&x, &y) in a.iter().zip(b.iter()) {
+        diff |= x ^ y;
+    }
+    diff == 0
+}
+
+/// Pure function to validate a CSRF token in constant time.
 pub fn validate_csrf_token(
     method: &axum::http::Method,
     header_token: Option<&str>,
@@ -175,7 +213,11 @@ pub fn validate_csrf_token(
     }
 
     match (header_token, session_token) {
-        (Some(h_val), Some(s_val)) if h_val == s_val && !s_val.is_empty() => Ok(()),
+        (Some(h_val), Some(s_val))
+            if !s_val.is_empty() && constant_time_eq(h_val.as_bytes(), s_val.as_bytes()) =>
+        {
+            Ok(())
+        }
         _ => Err(AuthError::CsrfVerificationFailed),
     }
 }
@@ -249,60 +291,19 @@ where
             return Err(err);
         }
 
-        // 1. Try to get user flags from session (Caching)
-        let is_admin = session
-            .get::<bool>("is_admin")
+        // Load user permissions fresh from the database on each request so
+        // administrative permission changes apply immediately without re-login.
+        let app_state = Arc::<AppState>::from_ref(state);
+        let user = get_user_by_id(&app_state.db, user_id)
             .await
-            .unwrap_or(Some(false))
-            .unwrap_or(false);
-        let bypass_alias_limit = session
-            .get::<bool>("bypass_alias_limit")
-            .await
-            .unwrap_or(Some(false))
-            .unwrap_or(false);
-        let can_send_firsthand = session
-            .get::<bool>("can_send_firsthand")
-            .await
-            .unwrap_or(Some(false))
-            .unwrap_or(false);
-        let data_loaded = session
-            .get::<bool>("user_data_loaded")
-            .await
-            .unwrap_or(Some(false))
-            .unwrap_or(false);
-
-        let (is_admin, bypass_alias_limit, can_send_firsthand) = if !data_loaded {
-            // 2. Fallback to DB if not cached or session is incomplete
-            let app_state = Arc::<AppState>::from_ref(state);
-
-            let user = crate::db::get_user_by_id(&app_state.db, user_id)
-                .await
-                .map_err(|_| AuthError::SessionError)?
-                .ok_or(AuthError::UserNotFound)?;
-
-            // 3. Cache it back in session for next time
-            let _ = session.insert("is_admin", user.is_admin).await;
-            let _ = session
-                .insert("bypass_alias_limit", user.bypass_alias_limit)
-                .await;
-            let _ = session
-                .insert("can_send_firsthand", user.can_send_firsthand)
-                .await;
-            let _ = session.insert("user_data_loaded", true).await;
-            (
-                user.is_admin,
-                user.bypass_alias_limit,
-                user.can_send_firsthand,
-            )
-        } else {
-            (is_admin, bypass_alias_limit, can_send_firsthand)
-        };
+            .map_err(|_| AuthError::SessionError)?
+            .ok_or(AuthError::UserNotFound)?;
 
         Ok(AuthenticatedUser {
             user_id,
-            is_admin,
-            bypass_alias_limit,
-            can_send_firsthand,
+            is_admin: user.is_admin,
+            bypass_alias_limit: user.bypass_alias_limit,
+            can_send_firsthand: user.can_send_firsthand,
         })
     }
 }
@@ -399,10 +400,7 @@ async fn htmx_js_handler() -> impl IntoResponse {
     (
         [
             (axum::http::header::CONTENT_TYPE, "application/javascript"),
-            (
-                axum::http::header::CACHE_CONTROL,
-                "public, max-age=31536000, immutable",
-            ),
+            (axum::http::header::CACHE_CONTROL, "public, max-age=86400"),
         ],
         HTMX_SRC,
     )
@@ -412,10 +410,7 @@ async fn sse_js_handler() -> impl IntoResponse {
     (
         [
             (axum::http::header::CONTENT_TYPE, "application/javascript"),
-            (
-                axum::http::header::CACHE_CONTROL,
-                "public, max-age=31536000, immutable",
-            ),
+            (axum::http::header::CACHE_CONTROL, "public, max-age=86400"),
         ],
         SSE_SRC,
     )
@@ -453,17 +448,16 @@ pub async fn create_app(state: AppState) -> Router {
             },
         );
 
-    let cookie_domain = crate::config::get_config("COOKIE_DOMAIN", "");
-    let secure_cookies = crate::config::get_config("SECURE_COOKIES", "true") == "true";
+    let cookie_domain = get_config("COOKIE_DOMAIN", "");
+    let secure_cookies = get_config("SECURE_COOKIES", "true") == "true";
+    let trusted_proxy = parse_trusted_proxy(&get_config("TRUSTED_PROXY", ""));
 
-    use tower_governor::{
-        GovernorLayer, governor::GovernorConfigBuilder, key_extractor::SmartIpKeyExtractor,
-    };
+    use tower_governor::{GovernorLayer, governor::GovernorConfigBuilder};
     let governor_conf = Arc::new(
         GovernorConfigBuilder::default()
             .per_second(2)
             .burst_size(5)
-            .key_extractor(SmartIpKeyExtractor)
+            .key_extractor(TrustedProxyIpKeyExtractor { trusted_proxy })
             .finish()
             .unwrap(),
     );
@@ -675,14 +669,14 @@ pub async fn run_web_server(
         // 2. Explicitly parse the address
         let socket_addr: SocketAddr = addr.parse()?;
         // HTTPS MODE
-        println!("🚀 Web server running at https://{}", addr);
+        tracing::info!("Web server running at https://{}", addr);
         // 3. Bind and serve
         axum_server::bind_rustls(socket_addr, config)
             .serve(app.into_make_service_with_connect_info::<SocketAddr>())
             .await?;
     } else {
         // HTTP MODE (Fallback)
-        println!("Web server running at http://{}", addr);
+        tracing::info!("Web server running at http://{}", addr);
         let listener = tokio::net::TcpListener::bind(addr).await?;
         axum::serve(
             listener,
@@ -939,22 +933,78 @@ async fn fetch_thread_messages(state: &AppState, email_id: Uuid) -> Vec<ThreadMe
     merge_thread_messages(inbound_replies, outbound_replies)
 }
 
+/// Parses the optional `TRUSTED_PROXY` IP address from configuration.
+pub fn parse_trusted_proxy(raw: &str) -> Option<IpAddr> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        trimmed.parse().ok()
+    }
+}
+
+/// Pure function that resolves the effective client IP address.
+///
+/// `X-Forwarded-For` is trusted **only** when `peer_ip` matches `trusted_proxy`,
+/// and even then only its **last** entry (the one appended by the trusted proxy)
+/// is used. Otherwise `peer_ip` is returned directly.
+pub fn resolve_client_ip(
+    peer_ip: Option<IpAddr>,
+    x_forwarded_for: Option<&str>,
+    trusted_proxy: Option<IpAddr>,
+) -> Option<IpAddr> {
+    let peer = peer_ip?;
+    if trusted_proxy == Some(peer)
+        && let Some(xff) = x_forwarded_for
+        && let Some(last_hop) = xff.rsplit(',').next()
+        && let Ok(forwarded_ip) = last_hop.trim().parse::<IpAddr>()
+    {
+        return Some(forwarded_ip);
+    }
+    Some(peer)
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct TrustedProxyIpKeyExtractor {
+    pub trusted_proxy: Option<IpAddr>,
+}
+
+impl tower_governor::key_extractor::KeyExtractor for TrustedProxyIpKeyExtractor {
+    type Key = IpAddr;
+
+    fn extract<T>(
+        &self,
+        req: &axum::http::Request<T>,
+    ) -> Result<Self::Key, tower_governor::GovernorError> {
+        let peer_ip = req
+            .extensions()
+            .get::<axum::extract::ConnectInfo<SocketAddr>>()
+            .map(|ci| ci.0.ip());
+        let xff = req
+            .headers()
+            .get("x-forwarded-for")
+            .and_then(|val| val.to_str().ok());
+
+        resolve_client_ip(peer_ip, xff, self.trusted_proxy)
+            .ok_or(tower_governor::GovernorError::UnableToExtractKey)
+    }
+}
+
 pub fn extract_client_ip(
     headers: &axum::http::HeaderMap,
     extensions: &axum::http::Extensions,
 ) -> String {
-    let x_forwarded_for = headers
+    let peer_ip = extensions
+        .get::<axum::extract::ConnectInfo<SocketAddr>>()
+        .map(|ci| ci.0.ip());
+    let xff = headers
         .get("x-forwarded-for")
-        .and_then(|val| val.to_str().ok())
-        .and_then(|s| s.split(',').next())
-        .map(|s| s.trim().to_string());
+        .and_then(|val| val.to_str().ok());
+    let trusted_proxy = parse_trusted_proxy(&get_config("TRUSTED_PROXY", ""));
 
-    x_forwarded_for.unwrap_or_else(|| {
-        extensions
-            .get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
-            .map(|ci| ci.0.to_string())
-            .unwrap_or_else(|| "unknown".into())
-    })
+    resolve_client_ip(peer_ip, xff, trusted_proxy)
+        .map(|ip| ip.to_string())
+        .unwrap_or_else(|| "unknown".into())
 }
 
 pub fn extract_domain(email: &str) -> Option<&str> {
@@ -1006,14 +1056,14 @@ mod tests {
     #[test]
     fn test_received_email_serialization() {
         let id = Uuid::new_v4();
-        let alias_id = Some(Uuid::new_v4());
+        let alias_id = Uuid::new_v4();
         let user_id = Uuid::new_v4();
         let now = time::OffsetDateTime::now_utc();
         let body_key = Uuid::new_v4();
 
         let email = ReceivedEmail {
             id,
-            alias_id,
+            alias_id: Some(alias_id),
             alias_address: None,
             user_id,
             sender_email: "sender@test.com".into(),
@@ -1031,7 +1081,7 @@ mod tests {
 
         let json = serde_json::to_value(&email).unwrap();
         assert_eq!(json["id"], id.to_string());
-        assert_eq!(json["alias_id"], alias_id.unwrap().to_string());
+        assert_eq!(json["alias_id"], alias_id.to_string());
         assert_eq!(json["user_id"], user_id.to_string());
     }
 
@@ -1142,5 +1192,79 @@ mod tests {
             can_send_firsthand: false,
         };
         assert!(u4.can_bypass_alias_limit());
+    }
+
+    #[test]
+    fn test_constant_time_eq() {
+        assert!(constant_time_eq(b"csrf-token-123", b"csrf-token-123"));
+        assert!(!constant_time_eq(b"csrf-token-123", b"csrf-token-124"));
+        assert!(!constant_time_eq(b"csrf-token-123", b"short"));
+        assert!(constant_time_eq(b"", b""));
+    }
+
+    #[test]
+    fn test_resolve_client_ip_trusted_proxy() {
+        let peer: IpAddr = "198.51.100.5".parse().unwrap();
+        let proxy: IpAddr = "10.0.0.1".parse().unwrap();
+        let real_client: IpAddr = "203.0.113.99".parse().unwrap();
+
+        // 1. No trusted proxy configured (default): X-Forwarded-For is ignored
+        assert_eq!(
+            resolve_client_ip(Some(peer), Some("203.0.113.99"), None),
+            Some(peer)
+        );
+
+        // 2. Trusted proxy configured, but connection comes from an untrusted peer: XFF ignored
+        assert_eq!(
+            resolve_client_ip(Some(peer), Some("203.0.113.99"), Some(proxy)),
+            Some(peer)
+        );
+
+        // 3. Connection comes from trusted proxy: only the LAST entry in X-Forwarded-For is used
+        assert_eq!(
+            resolve_client_ip(
+                Some(proxy),
+                Some("1.2.3.4, 5.6.7.8, 203.0.113.99"),
+                Some(proxy)
+            ),
+            Some(real_client)
+        );
+
+        // 4. Connection comes from trusted proxy, but XFF is malformed: falls back to peer IP
+        assert_eq!(
+            resolve_client_ip(Some(proxy), Some("not-an-ip"), Some(proxy)),
+            Some(proxy)
+        );
+
+        // 5. Missing ConnectInfo returns None
+        assert_eq!(
+            resolve_client_ip(None, Some("203.0.113.99"), Some(proxy)),
+            None
+        );
+    }
+
+    #[tokio::test]
+    async fn test_render_template_hides_error_details_on_500() {
+        struct FailDisplay;
+        impl std::fmt::Display for FailDisplay {
+            fn fmt(&self, _f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                Err(std::fmt::Error)
+            }
+        }
+
+        #[derive(askama::Template)]
+        #[template(source = "{{ val }}", ext = "txt")]
+        struct FailingTemplate {
+            val: FailDisplay,
+        }
+
+        let response = render_template(&FailingTemplate { val: FailDisplay });
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        let body_bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let body_text = String::from_utf8(body_bytes.to_vec()).unwrap();
+        assert_eq!(body_text, "Internal server error");
+        assert!(!body_text.contains("formatting error"));
     }
 }

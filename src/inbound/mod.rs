@@ -24,7 +24,7 @@ pub async fn run_server(
     filter_engine: crate::filter::FilterEngine,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let listener = TcpListener::bind(addr).await?;
-    println!("SMTP server listening on {}", &addr);
+    tracing::info!("SMTP server listening on {}", &addr);
 
     let rate_limiter = Arc::new(RateLimiter::new());
     let limits = rate_limit::InboundLimits::from_env();
@@ -80,7 +80,7 @@ pub async fn run_server(
             )
             .with_filter_engine(filter_engine_clone);
             if let Err(e) = session.handle().await {
-                eprintln!("SMTP error from {}: {}", peer_ip, e)
+                tracing::warn!("SMTP error from {}: {}", peer_ip, e);
             }
         });
     }

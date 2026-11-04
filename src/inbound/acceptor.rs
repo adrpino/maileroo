@@ -88,31 +88,29 @@ impl HotReloadAcceptor {
                 sleep(reload_interval).await;
 
                 // Check if file changed on disk
-                if let Ok(metadata) = std::fs::metadata(&cert_path) {
-                    if let Ok(modified) = metadata.modified() {
-                        if modified > last_modified
-                            || last_modified == std::time::SystemTime::UNIX_EPOCH
-                        {
-                            // Update the timestamp immediately so we don't get stuck in a reload loop
-                            // if the key file is missing or parsing fails.
-                            last_modified = modified;
+                if let Ok(metadata) = std::fs::metadata(&cert_path)
+                    && let Ok(modified) = metadata.modified()
+                    && (modified > last_modified
+                        || last_modified == std::time::SystemTime::UNIX_EPOCH)
+                {
+                    // Update the timestamp immediately so we don't get stuck in a reload loop
+                    // if the key file is missing or parsing fails.
+                    last_modified = modified;
 
-                            println!("♻️  Detected certificate change on disk. Reloading...");
+                    tracing::info!("Detected certificate change on disk. Reloading...");
 
-                            match Self::load_config(&cert_path, &key_path) {
-                                Ok(Some(new_config)) => {
-                                    let config_arc = Arc::new(Some(new_config));
-                                    watcher.store(config_arc);
-                                    println!("✅ Certificate reloaded successfully!");
-                                }
-                                Ok(None) => {
-                                    eprintln!(
-                                        "⚠️ Certificate file changed, but key file is missing or invalid. Waiting for next update."
-                                    );
-                                }
-                                Err(e) => eprintln!("❌ Failed to reload certs: {}", e),
-                            }
+                    match Self::load_config(&cert_path, &key_path) {
+                        Ok(Some(new_config)) => {
+                            let config_arc = Arc::new(Some(new_config));
+                            watcher.store(config_arc);
+                            tracing::info!("Certificate reloaded successfully.");
                         }
+                        Ok(None) => {
+                            tracing::warn!(
+                                "Certificate file changed, but key file is missing or invalid. Waiting for next update."
+                            );
+                        }
+                        Err(e) => tracing::error!("Failed to reload certs: {}", e),
                     }
                 }
             }

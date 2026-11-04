@@ -3,7 +3,7 @@ use crate::db::{get_alias_details_for_email, get_email_by_id};
 use crate::fs::write_file_async_with_permissions;
 use crate::web::attachments_form::read_multipart_fields;
 use crate::web::i18n::Messages;
-use crate::web::{AppState, AuthenticatedUser, ThreadMessage};
+use crate::web::{AppState, AuthenticatedUser, ThreadMessage, impl_into_response_for_template};
 use askama::Template;
 use axum::{
     extract::{Multipart, Path, State},
@@ -36,18 +36,7 @@ pub struct EmailReplyRowTemplate {
     pub locale: crate::web::i18n::Locale,
 }
 
-impl IntoResponse for EmailReplyRowTemplate {
-    fn into_response(self) -> axum::response::Response {
-        match self.render() {
-            Ok(html) => axum::response::Html(html).into_response(),
-            Err(err) => (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Failed to render template: {err}"),
-            )
-                .into_response(),
-        }
-    }
-}
+impl_into_response_for_template!(EmailReplyRowTemplate);
 
 /// Metadata returned by a reply dry run, without any side effect.
 #[derive(Debug, serde::Serialize)]

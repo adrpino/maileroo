@@ -12,33 +12,42 @@ pub struct MailerooServer {
     pub storage_dir: PathBuf,
 }
 
+/// Pure helper that validates required startup environment variables and returns
+/// a plain, log-friendly error message when any are missing.
+pub fn validate_required_startup_env(
+    database_url: &str,
+    srs_secret: &str,
+    prod_domain: &str,
+) -> Result<(), String> {
+    let mut missing_envs = Vec::new();
+    if database_url.trim().is_empty() {
+        missing_envs.push("DATABASE_URL");
+    }
+    if srs_secret.trim().is_empty() {
+        missing_envs.push("SRS_SECRET");
+    }
+    if prod_domain.trim().is_empty() {
+        missing_envs.push("PROD_DOMAIN (web portal domain, e.g., example.com)");
+    }
+
+    if !missing_envs.is_empty() {
+        return Err(format!(
+            "Configuration error: missing required environment variables: {}. Set these in your environment or .env file.",
+            missing_envs.join(", ")
+        ));
+    }
+    Ok(())
+}
+
 impl MailerooServer {
     pub async fn bootstrap() -> Result<Self, Box<dyn std::error::Error>> {
         let database_url = config::get_config("DATABASE_URL", "");
         let srs_secret = config::get_config("SRS_SECRET", "");
         let prod_domain = config::get_config("PROD_DOMAIN", "");
 
-        // Runtime validation of required configuration
-        let mut missing_envs = Vec::new();
-        if database_url.is_empty() {
-            missing_envs.push("DATABASE_URL");
-        }
-        if srs_secret.is_empty() {
-            missing_envs.push("SRS_SECRET");
-        }
-        if prod_domain.is_empty() {
-            missing_envs.push("PROD_DOMAIN (This is your web portal domain, e.g., example.com)");
-        }
-
-        if !missing_envs.is_empty() {
-            eprintln!("❌ Configuration Error: Missing required environment variables:");
-            for env in missing_envs {
-                eprintln!("   - {}", env);
-            }
-            eprintln!(
-                "\nPlease set these in your environment or in a .env file next to the binary."
-            );
-            std::process::exit(1);
+        if let Err(msg) = validate_required_startup_env(&database_url, &srs_secret, &prod_domain) {
+            tracing::error!("{}", msg);
+            return Err(msg.into());
         }
 
         let smtp_addr = config::get_config("SMTP_ADDR", "0.0.0.0:2525");
@@ -105,15 +114,15 @@ impl MailerooServer {
 
         // 3. Initialize HotReloadAcceptor
         let tls_acceptor = if cert_path.exists() && key_path.exists() {
-            println!("🔒 Certificates found. Starting with TLS support.");
+            tracing::info!("Certificates found. Starting with TLS support.");
             Some(inbound::acceptor::HotReloadAcceptor::new(
                 cert_path,
                 key_path,
                 std::time::Duration::from_secs(60),
             )?)
         } else if auto_tls_enabled {
-            println!(
-                "⚠️ Auto-TLS enabled but certificates not yet retrieved. Starting SMTP with lazy-loading TLS support."
+            tracing::warn!(
+                "Auto-TLS enabled but certificates not yet retrieved. Starting SMTP with lazy-loading TLS support."
             );
             Some(inbound::acceptor::HotReloadAcceptor::new(
                 cert_path,
@@ -121,7 +130,7 @@ impl MailerooServer {
                 std::time::Duration::from_secs(60),
             )?)
         } else {
-            println!("⚠️ Certificates not found. Starting in plain mode.");
+            tracing::warn!("Certificates not found. Starting in plain mode.");
             None
         };
 
@@ -134,16 +143,16 @@ impl MailerooServer {
 
         // Ensure storage directory exists
         if !Path::new(&storage_dir).exists() {
-            println!("Creating storage directory: {:?}", storage_dir);
+            tracing::info!("Creating storage directory: {:?}", storage_dir);
             create_dir_all_sync_with_permissions(&storage_dir)?;
         }
 
         let identity_domain = prod_domain.clone();
         let db_pool = db::init_pool(&database_url).await?;
 
-        println!("🚀 Checking database schema and running migrations...");
+        tracing::info!("Checking database schema and running migrations...");
         db::run_migrations(&db_pool).await?;
-        println!("✅ Database is fully migrated and ready!");
+        tracing::info!("Database is fully migrated and ready.");
 
         // Validate credentials and seed/verify administrator at startup
         let admin_config = config::AdminConfig::from_env();
@@ -187,7 +196,7 @@ impl MailerooServer {
             backfill_engine,
         };
 
-        println!("Starting services...");
+        tracing::info!("Starting services...");
 
         // Spawn background cleanup task
         let cleanup_pool = db_pool.clone();
@@ -208,14 +217,14 @@ impl MailerooServer {
                     Ok(body_keys) => {
                         for key in &body_keys {
                             let file_path = cleanup_storage_dir.join(key.to_string());
-                            if file_path.exists() {
-                                if let Err(e) = std::fs::remove_file(&file_path) {
-                                    tracing::error!(
-                                        "Failed to delete email file {:?}: {}",
-                                        file_path,
-                                        e
-                                    );
-                                }
+                            if file_path.exists()
+                                && let Err(e) = std::fs::remove_file(&file_path)
+                            {
+                                tracing::error!(
+                                    "Failed to delete email file {:?}: {}",
+                                    file_path,
+                                    e
+                                );
                             }
                         }
                         if !body_keys.is_empty() {
@@ -270,14 +279,14 @@ impl MailerooServer {
                             .expect("Manual TLS mode requires active certificates on boot"),
                     );
                     let socket_addr: std::net::SocketAddr = self.web_addr.parse()?;
-                    println!("🚀 Web server running at https://{}", self.web_addr);
+                    tracing::info!("Web server running at https://{}", self.web_addr);
                     axum_server::bind_rustls(socket_addr, config)
                         .serve(router.into_make_service())
                         .await
                         .map_err(|e| e.into())
                 } else {
                     let listener = tokio::net::TcpListener::bind(&self.web_addr).await?;
-                    println!("🚀 Web server running at http://{}", self.web_addr);
+                    tracing::info!("Web server running at http://{}", self.web_addr);
                     axum::serve(listener, router).await.map_err(|e| e.into())
                 }
             } else {
@@ -291,16 +300,31 @@ impl MailerooServer {
         tokio::select! {
             res = smtp_server => {
                 if let Err(e) = res {
-                    eprintln!("SMTP server error: {}", e);
+                    tracing::error!("SMTP server error: {}", e);
                 }
             }
             res = web_server => {
                 if let Err(e) = res {
-                    eprintln!("Web server error: {}", e);
+                    tracing::error!("Web server error: {}", e);
                 }
             }
         }
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_validate_required_startup_env() {
+        assert!(validate_required_startup_env("sqlite::memory:", "secret", "example.com").is_ok());
+
+        let err = validate_required_startup_env("", "secret", "").unwrap_err();
+        assert!(err.contains("DATABASE_URL"));
+        assert!(err.contains("PROD_DOMAIN"));
+        assert!(!err.contains("SRS_SECRET"));
     }
 }

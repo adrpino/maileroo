@@ -53,11 +53,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .with_no_client_auth(),
     );
 
+    let allow_plaintext_auth = std::env::var("TEST_SMTP_RELAY_ALLOW_PLAINTEXT_AUTH")
+        .or_else(|_| std::env::var("SMTP_RELAY_ALLOW_PLAINTEXT_AUTH"))
+        .map(|v| v == "true")
+        .unwrap_or(false);
+
     let config = maileroo::outbound::relay::RelayConfig {
         host: relay_host.clone(),
         port: relay_port,
         user: relay_user,
         pass: relay_pass,
+        allow_plaintext_auth,
     };
 
     println!(

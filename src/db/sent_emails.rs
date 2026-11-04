@@ -45,6 +45,7 @@ pub struct SentEmail {
     pub is_favorite: bool,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn insert_sent_email(
     pool: &DbPool,
     user_id: Uuid,

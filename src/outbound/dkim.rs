@@ -27,21 +27,21 @@ pub fn sign_message_with_dkim(
     private_b64: &str,
     selector: &str,
 ) -> Vec<u8> {
-    if let Ok(der_bytes) = base64::prelude::BASE64_STANDARD.decode(private_b64) {
-        if let Ok(pk_ed) = Ed25519Key::from_pkcs8_der(&der_bytes) {
-            let signer = mail_auth::dkim::DkimSigner::from_key(pk_ed)
-                .domain(sender_domain)
-                .selector(selector)
-                .headers(["From", "To", "Subject", "Date", "Message-ID"]);
+    if let Ok(der_bytes) = base64::prelude::BASE64_STANDARD.decode(private_b64)
+        && let Ok(pk_ed) = Ed25519Key::from_pkcs8_der(&der_bytes)
+    {
+        let signer = mail_auth::dkim::DkimSigner::from_key(pk_ed)
+            .domain(sender_domain)
+            .selector(selector)
+            .headers(["From", "To", "Subject", "Date", "Message-ID"]);
 
-            if let Ok(signature) = signer.sign(body) {
-                let sig_header = signature.to_string();
-                let mut signed_body = Vec::with_capacity(sig_header.len() + 2 + body.len());
-                signed_body.extend_from_slice(sig_header.as_bytes());
-                signed_body.extend_from_slice(b"\r\n");
-                signed_body.extend_from_slice(body);
-                return signed_body;
-            }
+        if let Ok(signature) = signer.sign(body) {
+            let sig_header = signature.to_string();
+            let mut signed_body = Vec::with_capacity(sig_header.len() + 2 + body.len());
+            signed_body.extend_from_slice(sig_header.as_bytes());
+            signed_body.extend_from_slice(b"\r\n");
+            signed_body.extend_from_slice(body);
+            return signed_body;
         }
     }
     body.to_vec()
