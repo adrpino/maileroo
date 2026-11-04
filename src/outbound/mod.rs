@@ -9,8 +9,10 @@ pub use queue::{
     calculate_next_retry, enqueue_job, get_job_file_path, process_queue_tick, start_queue_daemon,
 };
 
+use crate::config::get_config;
 use crate::dns::check_spf_for_domain;
 use crate::outbound::mime::{MimeEmail, build_mime, rewrite_body_for_forward};
+use crate::outbound::relay::{RelayConfig, parse_allow_plaintext_auth, send_via_relay};
 use hickory_resolver::TokioResolver;
 use pin_project_lite::pin_project;
 use std::pin::Pin;
@@ -304,23 +306,28 @@ impl OutboundService {
         let relay_config = if let Some(ref config) = self.relay_override {
             Some(config.clone())
         } else {
-            let mut pass = crate::config::get_config("SMTP_RELAY_TOKEN", "");
+            let mut pass = get_config("SMTP_RELAY_TOKEN", "");
             if pass.is_empty() {
-                pass = crate::config::get_config("SMTP_RELAY_PASSWORD", "");
+                pass = get_config("SMTP_RELAY_PASSWORD", "");
             }
             if pass.is_empty() {
-                pass = crate::config::get_config("SMTP_TOKEN", "");
+                pass = get_config("SMTP_TOKEN", "");
             }
             if !pass.is_empty() {
-                let host = crate::config::get_config("SMTP_RELAY_HOST", "live.smtp.mailtrap.io");
-                let port_str = crate::config::get_config("SMTP_RELAY_PORT", "587");
+                let host = get_config("SMTP_RELAY_HOST", "live.smtp.mailtrap.io");
+                let port_str = get_config("SMTP_RELAY_PORT", "587");
                 let port: u16 = port_str.parse().unwrap_or(587);
-                let user = crate::config::get_config("SMTP_RELAY_USER", "api");
-                Some(crate::outbound::relay::RelayConfig {
+                let user = get_config("SMTP_RELAY_USER", "api");
+                let allow_plaintext_auth = parse_allow_plaintext_auth(&get_config(
+                    "SMTP_RELAY_ALLOW_PLAINTEXT_AUTH",
+                    "false",
+                ));
+                Some(RelayConfig {
                     host,
                     port,
                     user,
                     pass,
+                    allow_plaintext_auth,
                 })
             } else {
                 None
@@ -328,7 +335,7 @@ impl OutboundService {
         };
 
         if let Some(config) = relay_config {
-            return crate::outbound::relay::send_via_relay(
+            return send_via_relay(
                 &self.client_config,
                 &self.identity_domain,
                 &config,
@@ -524,10 +531,8 @@ impl OutboundService {
                     } else {
                         at_line_start = false;
                     }
-                } else if byte == b'\n' {
-                    at_line_start = true;
                 } else {
-                    at_line_start = false;
+                    at_line_start = byte == b'\n';
                 }
             }
         }
@@ -765,11 +770,12 @@ mod tests {
         });
 
         // 2. Setup Client configuration
-        let relay_config = crate::outbound::relay::RelayConfig {
+        let relay_config = RelayConfig {
             host: "127.0.0.1".to_string(),
             port,
             user: "apikey".to_string(),
             pass: "testpass".to_string(),
+            allow_plaintext_auth: true,
         };
 
         let mut root_store = RootCertStore::empty();
@@ -783,7 +789,7 @@ mod tests {
         );
 
         // 3. Invoke relay sender
-        let res = crate::outbound::relay::send_via_relay(
+        let res = send_via_relay(
             &client_config,
             "example.com",
             &relay_config,

@@ -41,6 +41,7 @@ async fn test_outbound_queue_retry_lifecycle_e2e() {
             port,
             user: "api".to_string(),
             pass: "test-auth-token".to_string(),
+            allow_plaintext_auth: false,
         }));
 
         // 5. Trigger Outbound Send (which will hit the drop connection, fail, and automatically queue)
@@ -60,7 +61,18 @@ async fn test_outbound_queue_retry_lifecycle_e2e() {
         // Debug print all database rows to inspect contents
         match db {
             DbPool::Sqlite(ref p) => {
-                let rows: Vec<(uuid::Uuid, String, String, i32, String, String, String, Option<String>, Option<String>)> = sqlx::query_as("SELECT id, from_envelope, to_recipient, attempts, status, CAST(next_retry_at AS TEXT), CAST(created_at AS TEXT), strftime('%s', next_retry_at), strftime('%s', 'now') FROM outbound_queue")
+                type SqliteQueueDebugRow = (
+                    uuid::Uuid,
+                    String,
+                    String,
+                    i32,
+                    String,
+                    String,
+                    String,
+                    Option<String>,
+                    Option<String>,
+                );
+                let rows: Vec<SqliteQueueDebugRow> = sqlx::query_as("SELECT id, from_envelope, to_recipient, attempts, status, CAST(next_retry_at AS TEXT), CAST(created_at AS TEXT), strftime('%s', next_retry_at), strftime('%s', 'now') FROM outbound_queue")
                     .fetch_all(p)
                     .await
                     .unwrap();
@@ -178,6 +190,7 @@ async fn test_outbound_queue_retry_lifecycle_e2e() {
             port: healthy_port,
             user: "api".to_string(),
             pass: "test-auth-token".to_string(),
+            allow_plaintext_auth: true,
         }));
 
         // Execute single tick of process_queue_tick with the healthy service
@@ -302,6 +315,7 @@ async fn test_outbound_queue_daemon_periodic_delivery_e2e() {
                 port,
                 user: "api".to_string(),
                 pass: "test-auth-token".to_string(),
+                allow_plaintext_auth: true,
             }),
         );
 
@@ -403,6 +417,7 @@ async fn failing_retry_increments_attempts_and_does_not_duplicate() {
                 port,
                 user: "api".into(),
                 pass: "tok".into(),
+                allow_plaintext_auth: true,
             }),
         );
 
@@ -541,6 +556,7 @@ async fn permanent_failure_fails_fast() {
                 port,
                 user: "api".into(),
                 pass: "tok".into(),
+                allow_plaintext_auth: true,
             }),
         );
 
@@ -622,6 +638,7 @@ async fn exhausts_max_attempts_then_stops() {
                 port,
                 user: "api".into(),
                 pass: "tok".into(),
+                allow_plaintext_auth: true,
             }),
         );
 
@@ -951,6 +968,7 @@ async fn test_relay_delivery_fails_with_self_signed_cert() {
             port: smtp_port,
             user: "api".to_string(),
             pass: "tok".to_string(),
+            allow_plaintext_auth: false,
         });
 
         let res = outbound.deliver_once("receiver@ext.com", "sender@example.com", b"Subject: test\r\n\r\ntest body").await;
@@ -959,4 +977,61 @@ async fn test_relay_delivery_fails_with_self_signed_cert() {
         let err_str = res.unwrap_err().to_string();
         assert!(err_str.contains("TLS connection failed") || err_str.contains("invalid peer certificate") || err_str.contains("UnknownIssuer"), "Error should be a TLS error, got: {}", err_str);
     }).await;
+}
+
+#[tokio::test]
+async fn relay_refuses_plaintext_auth_by_default_when_starttls_missing() {
+    common::run_on_all_dbs(|db| async move {
+        let temp = tempfile::tempdir().unwrap();
+        let sink = common::FakeSmtpSink::start().await;
+
+        let resolver = hickory_resolver::TokioResolver::builder_tokio()
+            .unwrap()
+            .build()
+            .unwrap();
+
+        // Use RelayConfig::new which sets allow_plaintext_auth = false by default
+        let default_relay_config = maileroo::outbound::relay::RelayConfig::new(
+            sink.addr.ip().to_string(),
+            sink.addr.port(),
+            "api".to_string(),
+            "secret-token".to_string(),
+        );
+        assert!(!default_relay_config.allow_plaintext_auth);
+
+        let outbound = OutboundService::new(
+            "srs".into(),
+            resolver,
+            "example.com".into(),
+            db.clone(),
+            temp.path().to_path_buf(),
+        )
+        .with_relay_override(default_relay_config);
+
+        let res = outbound
+            .deliver_once(
+                "receiver@ext.com",
+                "sender@example.com",
+                b"Subject: test\r\n\r\ntest body",
+            )
+            .await;
+
+        assert!(
+            res.is_err(),
+            "Relay delivery must fail by default when STARTTLS is not offered and credentials are set"
+        );
+        let err_str = res.unwrap_err().to_string();
+        assert!(
+            err_str.contains(
+                "Refusing to send SMTP AUTH PLAIN credentials over unencrypted connection"
+            ),
+            "Unexpected error: {}",
+            err_str
+        );
+        assert!(
+            sink.messages().await.is_empty(),
+            "No message should be delivered when plaintext auth is refused"
+        );
+    })
+    .await;
 }
