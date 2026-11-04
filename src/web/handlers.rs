@@ -11,7 +11,8 @@ use crate::web::auth::{hash_password, verify_password_constant_time};
 use crate::web::i18n::{Locale, Messages};
 use crate::web::session::{csrf_clear_cookie_header, csrf_cookie_header, establish_session};
 use crate::web::{
-    AdminUser, AppState, AuthenticatedUser, extract_domain, impl_into_response_for_template,
+    AdminUser, AppState, AuthenticatedUser, extract_client_ip, extract_domain,
+    impl_into_response_for_template,
 };
 use axum::body::Body;
 use axum::extract::{Path, State};
@@ -149,7 +150,7 @@ pub async fn login_handler(
         user.as_ref().map(|u| u.password_hash.as_str()),
     ) && let Some(user) = user
     {
-        let client_ip = crate::web::extract_client_ip(&headers, &extensions);
+        let client_ip = extract_client_ip(&headers, &extensions);
         let csrf_token = establish_session(&session, &user).await;
 
         let _ = update_last_login(&state.db, user.id, Some(client_ip)).await;
@@ -178,6 +179,8 @@ pub async fn login_handler(
 pub async fn register_handler(
     locale: Locale,
     session: Session,
+    headers: axum::http::HeaderMap,
+    extensions: axum::http::Extensions,
     State(state): State<Arc<AppState>>,
     Form(payload): Form<RegisterRequest>,
 ) -> Response {
@@ -222,6 +225,12 @@ pub async fn register_handler(
     match insert_user(&state.db, &payload.email, &hash).await {
         Ok(user) => {
             let csrf_token = establish_session(&session, &user).await;
+
+            // Registration logs the user in, so record it as their first login.
+            let client_ip = extract_client_ip(&headers, &extensions);
+            if let Err(err) = update_last_login(&state.db, user.id, Some(client_ip)).await {
+                tracing::warn!("Failed to record login for new user {}: {}", user.id, err);
+            }
 
             let mut response = Response::builder()
                 .header("HX-Redirect", "/dashboard")

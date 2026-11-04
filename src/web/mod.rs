@@ -29,8 +29,8 @@ use axum::{
 };
 use send_email::MAX_UPLOAD_REQUEST_BYTES;
 use serde_json::{Value, json};
-use std::net::{IpAddr, SocketAddr};
-use std::sync::Arc;
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::sync::{Arc, Once};
 use uuid::Uuid;
 
 /// Renders an Askama template into an HTML response, logging internal rendering
@@ -985,9 +985,33 @@ impl tower_governor::key_extractor::KeyExtractor for TrustedProxyIpKeyExtractor 
             .get("x-forwarded-for")
             .and_then(|val| val.to_str().ok());
 
-        resolve_client_ip(peer_ip, xff, self.trusted_proxy)
-            .ok_or(tower_governor::GovernorError::UnableToExtractKey)
+        let resolved = resolve_client_ip(peer_ip, xff, self.trusted_proxy);
+        if resolved.is_none() {
+            MISSING_CONNECT_INFO_WARNING.call_once(|| {
+                tracing::warn!(
+                    "Rate limiter could not resolve the client IP because ConnectInfo is \
+                     missing; all clients share a single rate-limit bucket. Serve the router \
+                     with `into_make_service_with_connect_info::<SocketAddr>()`."
+                );
+            });
+        }
+        Ok(rate_limit_key(resolved))
     }
+}
+
+/// Ensures the missing-`ConnectInfo` warning is logged only once per process.
+static MISSING_CONNECT_INFO_WARNING: Once = Once::new();
+
+/// Key shared by every client when the peer address cannot be determined.
+pub const FALLBACK_RATE_LIMIT_KEY: IpAddr = IpAddr::V4(Ipv4Addr::UNSPECIFIED);
+
+/// Pure function mapping a resolved client IP to its rate-limit key.
+///
+/// When the client IP is unknown (e.g. the router is served without
+/// `ConnectInfo`), all requests share `FALLBACK_RATE_LIMIT_KEY` so that
+/// rate limiting degrades gracefully instead of failing every request.
+pub fn rate_limit_key(resolved: Option<IpAddr>) -> IpAddr {
+    resolved.unwrap_or(FALLBACK_RATE_LIMIT_KEY)
 }
 
 pub fn extract_client_ip(
@@ -1241,6 +1265,26 @@ mod tests {
             resolve_client_ip(None, Some("203.0.113.99"), Some(proxy)),
             None
         );
+    }
+
+    #[test]
+    fn test_rate_limit_key_falls_back_when_ip_unknown() {
+        let client: IpAddr = "203.0.113.99".parse().unwrap();
+        assert_eq!(rate_limit_key(Some(client)), client);
+        assert_eq!(rate_limit_key(None), FALLBACK_RATE_LIMIT_KEY);
+    }
+
+    #[test]
+    fn test_key_extractor_without_connect_info_does_not_error() {
+        use tower_governor::key_extractor::KeyExtractor;
+        let extractor = TrustedProxyIpKeyExtractor {
+            trusted_proxy: None,
+        };
+        let req = axum::http::Request::builder()
+            .uri("/login")
+            .body(())
+            .unwrap();
+        assert_eq!(extractor.extract(&req).unwrap(), FALLBACK_RATE_LIMIT_KEY);
     }
 
     #[tokio::test]
