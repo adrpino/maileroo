@@ -41,18 +41,17 @@ impl Blocklist {
         if let Ok(content) = std::fs::read_to_string(&file_path) {
             for line in content.lines() {
                 let line = line.trim();
-                if line.starts_with("deny ") {
-                    let clean = line["deny ".len()..].trim_end_matches(';').trim();
+                if let Some(stripped) = line.strip_prefix("deny ") {
+                    let clean = stripped.trim_end_matches(';').trim();
                     if clean.contains('/') {
-                        if let Some((ip_str, prefix_str)) = clean.split_once('/') {
-                            if let (Ok(ip), Ok(prefix)) =
+                        if let Some((ip_str, prefix_str)) = clean.split_once('/')
+                            && let (Ok(ip), Ok(prefix)) =
                                 (ip_str.parse::<Ipv4Addr>(), prefix_str.parse::<u8>())
-                            {
-                                subnets.push(Ipv4Subnet {
-                                    network: ip,
-                                    prefix,
-                                });
-                            }
+                        {
+                            subnets.push(Ipv4Subnet {
+                                network: ip,
+                                prefix,
+                            });
                         }
                     } else if let Ok(ip) = clean.parse::<IpAddr>() {
                         ips.insert(ip);

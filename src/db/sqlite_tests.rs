@@ -251,4 +251,84 @@ mod tests {
         assert_eq!(children.len(), 1);
         assert_eq!(children[0].thread_id, Some(root_email.id));
     }
+
+    #[tokio::test]
+    async fn test_sqlite_pool_wal_busy_timeout_and_attachments_schema_integrity() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let db_file = temp_dir.path().join("wal_test.db");
+        let db_url = format!("sqlite://{}?mode=rwc", db_file.display());
+
+        let db = crate::db::init_pool(&db_url).await.unwrap();
+        crate::db::run_migrations(&db).await.unwrap();
+
+        let DbPool::Sqlite(ref pool) = db else {
+            panic!("Expected SQLite pool");
+        };
+
+        // 1. Verify WAL journal mode, busy_timeout (5000ms), and foreign_keys (1)
+        let journal_mode: String = sqlx::query_scalar("PRAGMA journal_mode")
+            .fetch_one(pool)
+            .await
+            .unwrap();
+        assert_eq!(journal_mode.to_lowercase(), "wal");
+
+        let busy_timeout: i64 = sqlx::query_scalar("PRAGMA busy_timeout")
+            .fetch_one(pool)
+            .await
+            .unwrap();
+        assert_eq!(busy_timeout, 5000);
+
+        let fk_enabled: i64 = sqlx::query_scalar("PRAGMA foreign_keys")
+            .fetch_one(pool)
+            .await
+            .unwrap();
+        assert_eq!(fk_enabled, 1);
+
+        // 2. Verify attachments table rebuild dropped the received_emails-only FK
+        // so both received and sent emails can own attachment rows with foreign_keys=ON.
+        let user = insert_user(&db, "fk@test.com", "hash").await.unwrap();
+        let domain = insert_domain(&db, &"fk-domain.com".to_string())
+            .await
+            .unwrap();
+        let alias = insert_alias(&db, user.id, domain.id, "fk", "fk@test.com", true)
+            .await
+            .unwrap();
+        let sent = insert_sent_email(
+            &db,
+            user.id,
+            alias.id,
+            "dest@example.com",
+            "Sent with attachment",
+            Uuid::new_v4(),
+            EmailStatus::Sent,
+            None,
+        )
+        .await
+        .unwrap();
+
+        crate::db::attachments::insert_attachment(
+            &db,
+            Uuid::new_v4(),
+            sent.id,
+            Some("doc.pdf"),
+            Some("application/pdf"),
+            1024,
+            0,
+            false,
+            None,
+        )
+        .await
+        .expect("inserting attachment for sent_emails must succeed with foreign_keys=ON");
+
+        let fk_violations: Vec<(String, i64, String, i64)> =
+            sqlx::query_as("PRAGMA foreign_key_check")
+                .fetch_all(pool)
+                .await
+                .unwrap();
+        assert!(
+            fk_violations.is_empty(),
+            "PRAGMA foreign_key_check found violations: {:?}",
+            fk_violations
+        );
+    }
 }

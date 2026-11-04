@@ -45,12 +45,9 @@ pub async fn list_emails_handler(
     };
 
     let total_emails =
-        match get_email_count_by_user_id(&state.db, user.user.id, alias_filter, pagination.q, None)
+        get_email_count_by_user_id(&state.db, user.user.id, alias_filter, pagination.q, None)
             .await
-        {
-            Ok(count) => count,
-            Err(_) => 0,
-        };
+            .unwrap_or_default();
 
     let total_pages = (total_emails as f64 / page_size as f64).ceil() as i64;
 

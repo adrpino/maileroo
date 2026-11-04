@@ -29,7 +29,7 @@ pub struct MimeEmail {
 /// Helper to sanitize header values to prevent CRLF injection.
 /// Removes any \r or \n characters so an attacker cannot inject new headers.
 pub fn sanitize_header(value: &str) -> String {
-    value.replace('\r', "").replace('\n', "")
+    value.replace(['\r', '\n'], "")
 }
 
 /// Generates a globally unique Message-ID based on the sending domain.

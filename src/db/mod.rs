@@ -41,10 +41,18 @@ pub enum DbPool {
 }
 
 pub async fn init_pool(database_url: &str) -> Result<DbPool, sqlx::Error> {
-    if database_url.starts_with("sqlite://") {
-        let pool = sqlx::sqlite::SqlitePoolOptions::new()
-            .max_connections(50)
-            .connect(database_url)
+    if database_url.starts_with("sqlite:") {
+        use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions};
+        use std::str::FromStr;
+
+        let connect_options = SqliteConnectOptions::from_str(database_url)?
+            .journal_mode(SqliteJournalMode::Wal)
+            .busy_timeout(std::time::Duration::from_secs(5))
+            .foreign_keys(true);
+
+        let pool = SqlitePoolOptions::new()
+            .max_connections(5)
+            .connect_with(connect_options)
             .await?;
         Ok(DbPool::Sqlite(pool))
     } else {
@@ -552,6 +560,7 @@ pub async fn get_child_emails(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn insert_email(
     pool: &DbPool,
     alias_id: uuid::Uuid,

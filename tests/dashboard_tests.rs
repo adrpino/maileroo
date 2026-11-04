@@ -835,7 +835,7 @@ async fn test_attachment_part_index_resolution() {
         // Fetch First Attachment
         let req1 = axum::http::Request::builder()
             .method("GET")
-            .uri(&format!("/dashboard/email/{}/attachment/{}", email_id, att1.id))
+            .uri(format!("/dashboard/email/{}/attachment/{}", email_id, att1.id))
             .header(axum::http::header::COOKIE, &auth_cookie)
             .body(axum::body::Body::empty())
             .unwrap();
@@ -848,7 +848,7 @@ async fn test_attachment_part_index_resolution() {
         // Fetch Second Attachment
         let req2 = axum::http::Request::builder()
             .method("GET")
-            .uri(&format!("/dashboard/email/{}/attachment/{}", email_id, att2.id))
+            .uri(format!("/dashboard/email/{}/attachment/{}", email_id, att2.id))
             .header(axum::http::header::COOKIE, &auth_cookie)
             .body(axum::body::Body::empty())
             .unwrap();
@@ -909,7 +909,7 @@ async fn test_inline_image_e2e_dashboard_render() {
         // Fetch Email Detail Page
         let req = axum::http::Request::builder()
             .method("GET")
-            .uri(&format!("/emails/{}", email_id))
+            .uri(format!("/emails/{}", email_id))
             .header(axum::http::header::COOKIE, &auth_cookie)
             .body(axum::body::Body::empty())
             .unwrap();
@@ -925,7 +925,7 @@ async fn test_inline_image_e2e_dashboard_render() {
         // Verify Inline endpoint
         let inline_req = axum::http::Request::builder()
             .method("GET")
-            .uri(&format!("/dashboard/email/{}/inline/logo-123", email_id))
+            .uri(format!("/dashboard/email/{}/inline/logo-123", email_id))
             .header(axum::http::header::COOKIE, &auth_cookie)
             .body(axum::body::Body::empty())
             .unwrap();

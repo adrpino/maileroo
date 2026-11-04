@@ -156,7 +156,7 @@ async fn test_outbound_attachments_happy_path() {
 
         assert_eq!(sent_emails.len(), 1);
         let sent_email = &sent_emails[0];
-        assert_eq!(sent_email.has_attachments, true);
+        assert!(sent_email.has_attachments);
 
         // 3. Fetch attachment rows
         let attachments = get_attachments_for_email(&db, sent_email.id).await.unwrap();
@@ -182,7 +182,7 @@ async fn test_outbound_attachments_happy_path() {
         // 4. Download file1 and file2 to verify bytes and headers
         let req_dl1 = Request::builder()
             .method("GET")
-            .uri(&format!(
+            .uri(format!(
                 "/dashboard/email/{}/attachment/{}",
                 sent_email.id, att1.id
             ))
@@ -226,7 +226,7 @@ async fn test_outbound_attachments_happy_path() {
 
         let req_dl2 = Request::builder()
             .method("GET")
-            .uri(&format!(
+            .uri(format!(
                 "/dashboard/email/{}/attachment/{}",
                 sent_email.id, att2.id
             ))
@@ -425,7 +425,7 @@ async fn test_outbound_attachments_deletion_cleanup() {
         // 2. Perform delete via DELETE /emails/{id}
         let del_req = Request::builder()
             .method("DELETE")
-            .uri(&format!("/emails/{}", sent_email.id))
+            .uri(format!("/emails/{}", sent_email.id))
             .header(header::COOKIE, &auth_cookie)
             .header("X-CSRF-Token", &csrf_token)
             .body(Body::empty())

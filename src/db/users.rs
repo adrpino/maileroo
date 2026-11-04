@@ -273,6 +273,25 @@ pub async fn toggle_can_send_firsthand(
     }
 }
 
+/// Pure helper that validates administrator bootstrap credentials.
+pub fn validate_admin_credentials(admin_email: &str, admin_password: &str) -> Result<(), String> {
+    let mut errors = Vec::new();
+    if admin_email.trim().is_empty() || !admin_email.contains('@') {
+        errors.push("ADMIN_EMAIL must be a non-empty, valid email address");
+    }
+    if admin_password.len() < 8 {
+        errors.push("ADMIN_PASSWORD must be at least 8 characters long");
+    }
+
+    if !errors.is_empty() {
+        return Err(format!(
+            "Admin credentials validation failed: {}. Define ADMIN_EMAIL and ADMIN_PASSWORD in your environment or .env file.",
+            errors.join("; ")
+        ));
+    }
+    Ok(())
+}
+
 pub async fn seed_admin_on_startup(
     pool: &DbPool,
     config: &crate::config::AdminConfig,
@@ -280,23 +299,9 @@ pub async fn seed_admin_on_startup(
     let admin_email = config.email.trim().to_string();
     let admin_password = config.password.clone();
 
-    let mut errors = Vec::new();
-    if admin_email.is_empty() || !admin_email.contains('@') {
-        errors.push("ADMIN_EMAIL must be a non-empty, valid email address.");
-    }
-    if admin_password.len() < 8 {
-        errors.push("ADMIN_PASSWORD must be at least 8 characters long for adequate security.");
-    }
-
-    if !errors.is_empty() {
-        eprintln!("\n❌ Security Hardening Error: Admin credentials validation failed!");
-        for err in &errors {
-            eprintln!("   - {}", err);
-        }
-        eprintln!(
-            "\nPlease define ADMIN_EMAIL and ADMIN_PASSWORD in your environment or .env file before running Maileroo."
-        );
-        std::process::exit(1);
+    if let Err(msg) = validate_admin_credentials(&admin_email, &admin_password) {
+        tracing::error!("{}", msg);
+        return Err(msg.into());
     }
 
     // Hash password with Argon2id
@@ -351,6 +356,19 @@ pub async fn seed_admin_on_startup(
         }
     }
 
-    println!("👤 Seeded / verified secure administrator: {}", admin_email);
+    tracing::info!("Seeded / verified administrator: {}", admin_email);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_validate_admin_credentials() {
+        assert!(validate_admin_credentials("admin@example.com", "strong-password").is_ok());
+        assert!(validate_admin_credentials("", "strong-password").is_err());
+        assert!(validate_admin_credentials("invalid-email", "strong-password").is_err());
+        assert!(validate_admin_credentials("admin@example.com", "short").is_err());
+    }
 }
