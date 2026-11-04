@@ -1,11 +1,11 @@
 use crate::db::Domain;
 use crate::web::i18n::{Locale, Messages};
-use crate::web::{AdminUser, AppState};
+use crate::web::{AdminUser, AppState, impl_into_response_for_template};
 use askama::Template;
 use axum::{
     extract::{Path, State},
     http::StatusCode,
-    response::{Html, IntoResponse, Response},
+    response::IntoResponse,
 };
 use std::sync::Arc;
 use uuid::Uuid;
@@ -19,18 +19,7 @@ pub struct DkimModalTemplate {
     pub success_message: Option<String>,
 }
 
-impl IntoResponse for DkimModalTemplate {
-    fn into_response(self) -> Response {
-        match self.render() {
-            Ok(html) => Html(html).into_response(),
-            Err(err) => (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Failed to render template: {err}"),
-            )
-                .into_response(),
-        }
-    }
-}
+impl_into_response_for_template!(DkimModalTemplate);
 
 pub async fn dkim_modal_handler(
     _user: AdminUser,

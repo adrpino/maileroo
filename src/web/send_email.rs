@@ -6,7 +6,7 @@ use crate::fs::write_file_async_with_permissions;
 use crate::outbound::mime::{MimeEmail, build_mime};
 use crate::web::attachments_form::read_multipart_fields;
 use crate::web::i18n::{Locale, Messages};
-use crate::web::{AppState, FirsthandSenderUser};
+use crate::web::{AppState, FirsthandSenderUser, impl_into_response_for_template};
 use askama::Template;
 use axum::{
     extract::{Form, Multipart, Query, State},
@@ -29,19 +29,6 @@ pub struct ComposeModalTemplate {
     pub subject: String,
     pub body_text: String,
     pub selected_alias_id: Option<Uuid>,
-}
-
-impl IntoResponse for ComposeModalTemplate {
-    fn into_response(self) -> axum::response::Response {
-        match self.render() {
-            Ok(html) => axum::response::Html(html).into_response(),
-            Err(err) => (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Failed to render compose modal template: {}", err),
-            )
-                .into_response(),
-        }
-    }
 }
 
 #[derive(Deserialize)]
@@ -68,19 +55,18 @@ pub async fn compose_modal_handler(
     let mut body_text = String::new();
     let mut selected_alias_id = None;
 
-    if let Some(id) = query.draft_id {
-        if let Ok(Some(draft)) = get_sent_email_by_id_and_user(&state.db, id, user.0.user_id).await
-        {
-            draft_id = Some(draft.id);
-            to_email = draft.to_address;
-            subject = draft.subject;
-            selected_alias_id = Some(draft.from_alias_id);
+    if let Some(id) = query.draft_id
+        && let Ok(Some(draft)) = get_sent_email_by_id_and_user(&state.db, id, user.0.user_id).await
+    {
+        draft_id = Some(draft.id);
+        to_email = draft.to_address;
+        subject = draft.subject;
+        selected_alias_id = Some(draft.from_alias_id);
 
-            // Load body from disk
-            let file_path = state.storage_dir.join(draft.body_key.to_string());
-            if let Ok(body) = tokio::fs::read_to_string(&file_path).await {
-                body_text = body;
-            }
+        // Load body from disk
+        let file_path = state.storage_dir.join(draft.body_key.to_string());
+        if let Ok(body) = tokio::fs::read_to_string(&file_path).await {
+            body_text = body;
         }
     }
 
@@ -112,18 +98,7 @@ pub struct ToastTemplate {
     pub success: bool,
 }
 
-impl IntoResponse for ToastTemplate {
-    fn into_response(self) -> axum::response::Response {
-        match self.render() {
-            Ok(html) => axum::response::Html(html).into_response(),
-            Err(err) => (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Failed to render toast template: {}", err),
-            )
-                .into_response(),
-        }
-    }
-}
+impl_into_response_for_template!(ComposeModalTemplate, ToastTemplate);
 
 /// Errors surfaced by the shared firsthand send core.
 #[derive(Debug)]
@@ -657,7 +632,7 @@ pub async fn save_draft_handler(
                    <span id="draft-indicator" class="htmx-indicator draft-saving">Saving</span>
                    <span id="draft-status-text">Draft saved at {}</span>"#,
                 new_draft_id,
-                time::OffsetDateTime::now_utc().to_string()[11..16].to_string()
+                &time::OffsetDateTime::now_utc().to_string()[11..16]
             ))
             .into_response()
         }

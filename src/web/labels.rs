@@ -2,8 +2,7 @@ use askama::Template;
 use axum::{
     Form,
     extract::{Path, Query, State},
-    http::StatusCode,
-    response::{Html, IntoResponse, Response},
+    response::IntoResponse,
 };
 use serde::Deserialize;
 use std::sync::Arc;
@@ -16,7 +15,7 @@ use crate::db::labels::{
 };
 use crate::filter::BackfillJob;
 use crate::web::i18n::{Locale, Messages};
-use crate::web::{AppState, AuthenticatedUser};
+use crate::web::{AppState, AuthenticatedUser, impl_into_response_for_template};
 
 #[derive(Deserialize)]
 pub struct ModalQuery {
@@ -51,19 +50,6 @@ pub struct LabelsModalTemplate {
     pub error: Option<String>,
 }
 
-impl IntoResponse for LabelsModalTemplate {
-    fn into_response(self) -> Response {
-        match self.render() {
-            Ok(html) => Html(html).into_response(),
-            Err(err) => (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Failed to render template: {err}"),
-            )
-                .into_response(),
-        }
-    }
-}
-
 #[derive(Template)]
 #[template(path = "email_labels_partial.html")]
 pub struct EmailLabelsPartialTemplate {
@@ -73,18 +59,7 @@ pub struct EmailLabelsPartialTemplate {
     pub all_user_labels: Vec<Label>,
 }
 
-impl IntoResponse for EmailLabelsPartialTemplate {
-    fn into_response(self) -> Response {
-        match self.render() {
-            Ok(html) => Html(html).into_response(),
-            Err(err) => (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Failed to render template: {err}"),
-            )
-                .into_response(),
-        }
-    }
-}
+impl_into_response_for_template!(LabelsModalTemplate, EmailLabelsPartialTemplate);
 
 pub async fn get_labels_modal_handler(
     locale: Locale,

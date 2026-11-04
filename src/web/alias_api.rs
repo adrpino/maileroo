@@ -238,7 +238,7 @@ pub async fn create_alias_handler(
         _ => return (StatusCode::INTERNAL_SERVER_ERROR, "User not found").into_response(),
     };
 
-    let _ = insert_alias(
+    if let Err(e) = insert_alias(
         &state.db,
         user.user_id,
         payload.domain_id,
@@ -246,7 +246,26 @@ pub async fn create_alias_handler(
         &user_record.email,
         payload.auto_forward,
     )
-    .await;
+    .await
+    {
+        tracing::error!("Error inserting alias: {}", e);
+        let aliases = get_aliases_by_user_id(&state.db, user.user_id)
+            .await
+            .unwrap_or_default();
+        let domains = get_domains(&state.db).await.unwrap_or_default();
+        let suggestions = generate_corporate_suggestions(&state.db, payload.domain_id).await;
+
+        return AliasesTemplate {
+            aliases,
+            domains,
+            suggestions,
+            error: Some(locale.error_alias_taken().to_string()),
+            max_aliases: MAX_ALIASES_PER_USER,
+            locale,
+            can_bypass_limit: user.can_bypass_alias_limit(),
+        }
+        .into_response();
+    }
 
     Response::builder()
         .header("HX-Redirect", "/aliases")

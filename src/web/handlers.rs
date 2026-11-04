@@ -1,14 +1,18 @@
 use crate::db::attachments::AttachmentRow;
 use crate::db::{
-    Alias, DbPool, Domain, delete_alias_by_id, get_aliases_by_user_id, get_domains,
-    get_user_by_email, insert_user, update_last_login,
+    Alias, ApiKey, DbPool, Domain, delete_alias_by_id, delete_api_key, delete_domain_by_id,
+    get_aliases_by_user_id, get_api_keys, get_domains, get_user_by_email, insert_api_key,
+    insert_domain, insert_user, update_alias_auto_forward, update_last_login,
 };
 use crate::disposable_domains::is_disposable;
 use crate::web::ThreadMessage;
-use crate::web::auth::{hash_password, verify_password};
+use crate::web::api_auth::{generate_api_key, hash_api_key};
+use crate::web::auth::{hash_password, verify_password_constant_time};
 use crate::web::i18n::{Locale, Messages};
 use crate::web::session::{csrf_clear_cookie_header, csrf_cookie_header, establish_session};
-use crate::web::{AdminUser, AppState, AuthenticatedUser, extract_domain};
+use crate::web::{
+    AdminUser, AppState, AuthenticatedUser, extract_domain, impl_into_response_for_template,
+};
 use axum::body::Body;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
@@ -50,8 +54,8 @@ fn is_valid_email(email: &str) -> bool {
     re.is_match(email)
 }
 
-pub async fn logout_handler(session: Session) -> Response {
-    let _ = session.clear().await;
+pub async fn logout_handler(_user: AuthenticatedUser, session: Session) -> Response {
+    let _ = session.flush().await;
 
     let cookie = csrf_clear_cookie_header();
 
@@ -69,36 +73,12 @@ pub struct LoginTemplate {
     pub error: Option<String>,
     pub locale: Locale,
 }
-impl IntoResponse for LoginTemplate {
-    fn into_response(self) -> Response {
-        match self.render() {
-            Ok(html) => Html(html).into_response(),
-            Err(err) => (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Failed to render template: {err}"),
-            )
-                .into_response(),
-        }
-    }
-}
 
 #[derive(Template)]
 #[template(path = "register.html")]
 pub struct RegisterTemplate {
     pub error: Option<String>,
     pub locale: Locale,
-}
-impl IntoResponse for RegisterTemplate {
-    fn into_response(self) -> Response {
-        match self.render() {
-            Ok(html) => Html(html).into_response(),
-            Err(err) => (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Failed to render template: {err}"),
-            )
-                .into_response(),
-        }
-    }
 }
 
 #[derive(Deserialize)]
@@ -127,18 +107,6 @@ pub struct EmailDetailTemplate {
     pub labels: Vec<crate::db::labels::Label>,
     pub all_user_labels: Vec<crate::db::labels::Label>,
     pub is_favorite: bool,
-}
-impl IntoResponse for EmailDetailTemplate {
-    fn into_response(self) -> Response {
-        match self.render() {
-            Ok(html) => Html(html).into_response(),
-            Err(err) => (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Failed to render template: {err}"),
-            )
-                .into_response(),
-        }
-    }
 }
 
 pub async fn login_page(locale: Locale) -> LoginTemplate {
@@ -171,21 +139,19 @@ pub async fn login_handler(
         .into_response();
     }
 
-    let user = match get_user_by_email(&state.db, &payload.email).await {
-        Ok(Some(u)) => u,
-        _ => {
-            return LoginTemplate {
-                error: Some(locale.invalid_credentials().to_string()),
-                locale,
-            }
-            .into_response();
-        }
-    };
+    let user = get_user_by_email(&state.db, &payload.email)
+        .await
+        .ok()
+        .flatten();
 
-    if verify_password(&payload.password, &user.password_hash) {
+    if verify_password_constant_time(
+        &payload.password,
+        user.as_ref().map(|u| u.password_hash.as_str()),
+    ) && let Some(user) = user
+    {
+        let client_ip = crate::web::extract_client_ip(&headers, &extensions);
         let csrf_token = establish_session(&session, &user).await;
 
-        let client_ip = crate::web::extract_client_ip(&headers, &extensions);
         let _ = update_last_login(&state.db, user.id, Some(client_ip)).await;
 
         let mut response = Response::builder()
@@ -289,18 +255,6 @@ pub struct DomainsTemplate {
     pub domains: Vec<DomainWithStatus>,
     pub locale: Locale,
 }
-impl IntoResponse for DomainsTemplate {
-    fn into_response(self) -> Response {
-        match self.render() {
-            Ok(html) => Html(html).into_response(),
-            Err(err) => (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Failed to render template: {err}"),
-            )
-                .into_response(),
-        }
-    }
-}
 
 #[derive(Deserialize)]
 pub struct CreateDomainRequest {
@@ -346,8 +300,11 @@ pub async fn create_domain_handler(
     _user: AdminUser,
     State(state): State<Arc<AppState>>,
     Form(payload): Form<CreateDomainRequest>,
-) -> impl IntoResponse {
-    let _ = crate::db::insert_domain(&state.db, &payload.domain_name).await;
+) -> Response {
+    if let Err(e) = insert_domain(&state.db, &payload.domain_name).await {
+        tracing::error!("Error inserting domain '{}': {}", payload.domain_name, e);
+        return (StatusCode::INTERNAL_SERVER_ERROR, "Database error").into_response();
+    }
     let domains = get_domains(&state.db).await.unwrap_or_default();
 
     let mut set = tokio::task::JoinSet::new();
@@ -412,6 +369,7 @@ pub async fn create_domain_handler(
             })
             .collect::<String>(),
     )
+    .into_response()
 }
 
 pub async fn delete_domain_handler(
@@ -419,7 +377,6 @@ pub async fn delete_domain_handler(
     State(state): State<Arc<AppState>>,
     Path(domain_id): Path<Uuid>,
 ) -> impl IntoResponse {
-    use crate::db::delete_domain_by_id;
     match delete_domain_by_id(&state.db, domain_id).await {
         Ok(_) => StatusCode::OK.into_response(),
         Err(e) => {
@@ -439,19 +396,6 @@ pub struct AliasesTemplate {
     pub max_aliases: i64,
     pub locale: Locale,
     pub can_bypass_limit: bool,
-}
-
-impl IntoResponse for AliasesTemplate {
-    fn into_response(self) -> Response {
-        match self.render() {
-            Ok(html) => Html(html).into_response(),
-            Err(err) => (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Failed to render template: {err}"),
-            )
-                .into_response(),
-        }
-    }
 }
 
 pub async fn generate_corporate_suggestions(pool: &DbPool, domain_id: Uuid) -> Vec<String> {
@@ -544,21 +488,9 @@ pub async fn delete_alias_handler(
 #[derive(Template)]
 #[template(path = "api_keys.html")]
 pub struct ApiKeysTemplate {
-    pub keys: Vec<crate::db::ApiKey>,
+    pub keys: Vec<ApiKey>,
     pub locale: Locale,
     pub new_key: Option<String>,
-}
-impl IntoResponse for ApiKeysTemplate {
-    fn into_response(self) -> Response {
-        match self.render() {
-            Ok(html) => Html(html).into_response(),
-            Err(err) => (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Failed to render template: {err}"),
-            )
-                .into_response(),
-        }
-    }
 }
 
 pub async fn api_keys_page(
@@ -566,7 +498,7 @@ pub async fn api_keys_page(
     user: AdminUser,
     State(state): State<Arc<AppState>>,
 ) -> impl IntoResponse {
-    let keys = crate::db::get_api_keys(&state.db, user.0.user_id)
+    let keys = get_api_keys(&state.db, user.0.user_id)
         .await
         .unwrap_or_default();
 
@@ -587,23 +519,16 @@ pub async fn create_api_key_handler(
     user: AdminUser,
     State(state): State<Arc<AppState>>,
     Form(payload): Form<CreateApiKeyRequest>,
-) -> impl IntoResponse {
-    use rand::{Rng, thread_rng};
-    use sha2::{Digest, Sha256};
+) -> Response {
+    let token = generate_api_key();
+    let hash = hash_api_key(&token);
 
-    let token: String = thread_rng()
-        .sample_iter(&rand::distributions::Alphanumeric)
-        .take(32)
-        .map(char::from)
-        .collect();
+    if let Err(e) = insert_api_key(&state.db, user.0.user_id, &hash, &payload.name).await {
+        tracing::error!("Error creating API key: {}", e);
+        return (StatusCode::INTERNAL_SERVER_ERROR, "Database error").into_response();
+    }
 
-    let mut hasher = Sha256::new();
-    hasher.update(token.as_bytes());
-    let hash = format!("{:x}", hasher.finalize());
-
-    let _ = crate::db::insert_api_key(&state.db, user.0.user_id, &hash, &payload.name).await;
-
-    let keys = crate::db::get_api_keys(&state.db, user.0.user_id)
+    let keys = get_api_keys(&state.db, user.0.user_id)
         .await
         .unwrap_or_default();
 
@@ -612,6 +537,7 @@ pub async fn create_api_key_handler(
         locale,
         new_key: Some(token),
     }
+    .into_response()
 }
 
 pub async fn delete_api_key_handler(
@@ -619,7 +545,7 @@ pub async fn delete_api_key_handler(
     State(state): State<Arc<AppState>>,
     Path(key_id): Path<Uuid>,
 ) -> impl IntoResponse {
-    match crate::db::delete_api_key(&state.db, key_id, user.0.user_id).await {
+    match delete_api_key(&state.db, key_id, user.0.user_id).await {
         Ok(_) => StatusCode::OK.into_response(),
         Err(_) => (StatusCode::INTERNAL_SERVER_ERROR, "Database error").into_response(),
     }
@@ -668,14 +594,7 @@ pub async fn toggle_alias_forward_handler(
     Path(alias_id): Path<Uuid>,
     Form(payload): Form<ToggleAutoForwardRequest>,
 ) -> impl IntoResponse {
-    match crate::db::update_alias_auto_forward(
-        &state.db,
-        alias_id,
-        user.user_id,
-        payload.auto_forward,
-    )
-    .await
-    {
+    match update_alias_auto_forward(&state.db, alias_id, user.user_id, payload.auto_forward).await {
         Ok(_) => {
             let checked = if payload.auto_forward { "checked" } else { "" };
             let status_text = if payload.auto_forward {
@@ -731,30 +650,6 @@ pub struct ModalTemplate {
     pub swap: String,
     pub include_target: Option<String>,
 }
-impl IntoResponse for ModalTemplate {
-    fn into_response(self) -> Response {
-        match self.render() {
-            Ok(html) => Html(html).into_response(),
-            Err(err) => (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Failed to render template: {err}"),
-            )
-                .into_response(),
-        }
-    }
-}
-impl IntoResponse for SuggestionListTemplate {
-    fn into_response(self) -> Response {
-        match self.render() {
-            Ok(html) => Html(html).into_response(),
-            Err(err) => (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Failed to render template: {err}"),
-            )
-                .into_response(),
-        }
-    }
-}
 
 use crate::web::dashboard::DisplayEmail;
 
@@ -774,18 +669,18 @@ pub struct PasswordInputTemplate {
     pub placeholder: Option<String>,
     pub autocomplete: Option<String>,
 }
-impl IntoResponse for PasswordInputTemplate {
-    fn into_response(self) -> Response {
-        match self.render() {
-            Ok(html) => Html(html).into_response(),
-            Err(err) => (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Failed to render template: {err}"),
-            )
-                .into_response(),
-        }
-    }
-}
+
+impl_into_response_for_template!(
+    LoginTemplate,
+    RegisterTemplate,
+    EmailDetailTemplate,
+    DomainsTemplate,
+    AliasesTemplate,
+    ApiKeysTemplate,
+    ModalTemplate,
+    SuggestionListTemplate,
+    PasswordInputTemplate,
+);
 
 #[derive(Deserialize)]
 pub struct PasswordToggleRequest {

@@ -27,7 +27,7 @@ use crate::db::{
 };
 use crate::web::handlers::{EmailRowTemplate, ModalTemplate};
 use crate::web::i18n::{Locale, Messages};
-use crate::web::{AppState, AuthenticatedUser, ThreadMessage};
+use crate::web::{AppState, AuthenticatedUser, ThreadMessage, impl_into_response_for_template};
 
 #[derive(Deserialize)]
 pub struct PaginationParams {
@@ -70,19 +70,6 @@ pub struct DashboardTemplate {
     pub current_page: i64,
     pub total_pages: i64,
     pub total_emails: i64,
-}
-
-impl IntoResponse for DashboardTemplate {
-    fn into_response(self) -> Response {
-        match self.render() {
-            Ok(html) => Html(html).into_response(),
-            Err(err) => (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Failed to render template: {err}"),
-            )
-                .into_response(),
-        }
-    }
 }
 
 pub async fn dashboard_handler(
@@ -231,7 +218,7 @@ pub async fn dashboard_handler(
             }
         };
 
-        let count = match get_email_count_by_user_id(
+        let count = get_email_count_by_user_id(
             &state.db,
             user.user_id,
             alias_filter.clone(),
@@ -239,10 +226,7 @@ pub async fn dashboard_handler(
             label_filter.clone(),
         )
         .await
-        {
-            Ok(c) => c,
-            Err(_) => 0,
-        };
+        .unwrap_or_default();
 
         let email_ids: Vec<Uuid> = inbox_emails.iter().map(|e| e.id).collect();
         let mut labels_map = get_labels_for_emails(&state.db, &email_ids)
@@ -274,10 +258,9 @@ pub async fn dashboard_handler(
 
     let total_pages = calculate_total_pages(total_emails, page_size);
 
-    let user_aliases = match get_aliases_by_user_id(&state.db, user.user_id).await {
-        Ok(aliases) => aliases,
-        Err(_) => vec![],
-    };
+    let user_aliases = get_aliases_by_user_id(&state.db, user.user_id)
+        .await
+        .unwrap_or_default();
 
     let user_labels = get_labels_by_user(&state.db, user.user_id)
         .await
@@ -285,10 +268,7 @@ pub async fn dashboard_handler(
 
     let alias_count = user_aliases.len() as i64;
 
-    let domain_count = match get_domain_count(&state.db).await {
-        Ok(count) => count,
-        Err(_) => 0,
-    };
+    let domain_count = get_domain_count(&state.db).await.unwrap_or_default();
 
     (
         [
@@ -635,18 +615,7 @@ pub struct EmailDetailTemplate {
     pub is_favorite: bool,
 }
 
-impl IntoResponse for EmailDetailTemplate {
-    fn into_response(self) -> Response {
-        match self.render() {
-            Ok(html) => Html(html).into_response(),
-            Err(err) => (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Failed to render template: {err}"),
-            )
-                .into_response(),
-        }
-    }
-}
+impl_into_response_for_template!(DashboardTemplate, EmailDetailTemplate);
 
 pub async fn dashboard_sse_handler(
     State(state): State<Arc<AppState>>,
@@ -679,7 +648,7 @@ pub async fn dashboard_sse_handler(
                             labels,
                             is_favorite: email.is_favorite,
                         };
-                        let template = crate::web::handlers::EmailRowTemplate { email: display_email, locale: locale.clone() };
+                        let template = crate::web::handlers::EmailRowTemplate { email: display_email, locale };
                         if let Ok(html) = askama::Template::render(&template) {
                             yield Ok::<Event, std::convert::Infallible>(Event::default().data(html).event("new_email"));
                         }
@@ -1005,7 +974,7 @@ mod tests {
             is_favorite: sent_row.is_favorite,
         };
 
-        assert_eq!(display_email.is_sent_folder, true);
+        assert!(display_email.is_sent_folder);
         assert_eq!(display_email.correspondent_email, "recipient@test.com");
         assert_eq!(display_email.alias_address, "myalias@domain.com");
         assert_eq!(display_email.status, Some(EmailStatus::Sent));

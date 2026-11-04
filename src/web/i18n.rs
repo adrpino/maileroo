@@ -1,6 +1,6 @@
 use axum::{extract::FromRequestParts, http::request::Parts};
 
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum Locale {
     #[default]
     En,
@@ -20,6 +20,50 @@ impl Locale {
     }
 }
 
+/// Pure function that parses an `Accept-Language` header and selects the supported
+/// [`Locale`] with the highest quality weight (`q`), preserving header order on ties
+/// and defaulting to [`Locale::En`].
+pub fn parse_accept_language(accept_language: &str) -> Locale {
+    let mut best: Option<(Locale, f32)> = None;
+
+    for raw_item in accept_language.split(',') {
+        let mut parts = raw_item.split(';');
+        let Some(tag) = parts.next() else {
+            continue;
+        };
+        let primary = tag.trim().split('-').next().unwrap_or("").to_lowercase();
+        let locale = match primary.as_str() {
+            "en" => Some(Locale::En),
+            "es" => Some(Locale::Es),
+            "fr" => Some(Locale::Fr),
+            "pt" => Some(Locale::Pt),
+            _ => None,
+        };
+        let Some(locale) = locale else {
+            continue;
+        };
+
+        let mut q = 1.0_f32;
+        for param in parts {
+            if let Some(val) = param.trim().strip_prefix("q=")
+                && let Ok(parsed) = val.trim().parse::<f32>()
+            {
+                q = parsed;
+            }
+        }
+
+        if !q.is_finite() || q <= 0.0 || q > 1.0 {
+            continue;
+        }
+
+        if best.is_none_or(|(_, best_q)| q > best_q) {
+            best = Some((locale, q));
+        }
+    }
+
+    best.map(|(locale, _)| locale).unwrap_or(Locale::En)
+}
+
 impl<S> FromRequestParts<S> for Locale
 where
     S: Send + Sync,
@@ -33,20 +77,11 @@ where
             .and_then(|v| v.to_str().ok())
             .unwrap_or("");
 
-        // Simple parser for Accept-Language: es-ES,es;q=0.9,en;q=0.8
-        let lang = accept_language.to_lowercase();
-        if lang.contains("es") {
-            Ok(Locale::Es)
-        } else if lang.contains("fr") {
-            Ok(Locale::Fr)
-        } else if lang.contains("pt") {
-            Ok(Locale::Pt)
-        } else {
-            Ok(Locale::En)
-        }
+        Ok(parse_accept_language(accept_language))
     }
 }
 
+#[allow(clippy::wrong_self_convention)]
 pub trait Messages {
     fn login_title(&self) -> &'static str;
     fn email_label(&self) -> &'static str;
@@ -2097,6 +2132,24 @@ mod tests {
 
         // Test Other Language (Default to English)
         assert!(matches!(get_locale(Some("de-DE")).await, Locale::En));
+
+        // Test q-value ordering: English preferred over Spanish
+        assert_eq!(
+            get_locale(Some("en-US,en;q=0.9,es;q=0.5")).await,
+            Locale::En
+        );
+
+        // Test q-value ordering: French has higher q than Spanish after unsupported German
+        assert_eq!(
+            get_locale(Some("de-DE,es;q=0.7,fr;q=0.9")).await,
+            Locale::Fr
+        );
+
+        // Test q=0 (explicitly rejected language)
+        assert_eq!(get_locale(Some("es;q=0,pt;q=0.8")).await, Locale::Pt);
+
+        // Test language subtag boundaries (e.g. "et-EE" must not match "es")
+        assert_eq!(get_locale(Some("et-EE")).await, Locale::En);
     }
 
     #[test]
