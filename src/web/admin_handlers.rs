@@ -1,3 +1,4 @@
+use crate::web::audit::{self, AuditEvent};
 use crate::web::i18n::{Locale, Messages};
 use crate::web::{AdminUser, AppState, impl_into_response_for_template};
 use askama::Template;
@@ -71,7 +72,7 @@ pub fn render_toggle_td(
 
 pub async fn toggle_bypass_limit_handler(
     locale: Locale,
-    _user: AdminUser,
+    admin: AdminUser,
     State(state): State<Arc<AppState>>,
     axum::extract::Path(target_user_id): axum::extract::Path<Uuid>,
 ) -> impl IntoResponse {
@@ -87,6 +88,15 @@ pub async fn toggle_bypass_limit_handler(
         }
     };
 
+    audit::record(
+        AuditEvent::AdminUserPermissionChanged,
+        Some(admin.0.user_id),
+        &format!(
+            "target_user_id={} bypass_alias_limit={}",
+            target_user_id, new_val
+        ),
+    );
+
     Html(render_toggle_td(
         new_val,
         locale.admin_bypass_limit_tooltip(),
@@ -99,7 +109,7 @@ pub async fn toggle_bypass_limit_handler(
 
 pub async fn toggle_disable_autoclean_handler(
     locale: Locale,
-    _user: AdminUser,
+    admin: AdminUser,
     State(state): State<Arc<AppState>>,
     axum::extract::Path(target_user_id): axum::extract::Path<Uuid>,
 ) -> impl IntoResponse {
@@ -115,6 +125,15 @@ pub async fn toggle_disable_autoclean_handler(
         }
     };
 
+    audit::record(
+        AuditEvent::AdminUserPermissionChanged,
+        Some(admin.0.user_id),
+        &format!(
+            "target_user_id={} disable_autoclean={}",
+            target_user_id, new_val
+        ),
+    );
+
     Html(render_toggle_td(
         new_val,
         locale.admin_disable_autoclean_tooltip(),
@@ -127,7 +146,7 @@ pub async fn toggle_disable_autoclean_handler(
 
 pub async fn toggle_can_send_firsthand_handler(
     locale: Locale,
-    _user: AdminUser,
+    admin: AdminUser,
     State(state): State<Arc<AppState>>,
     axum::extract::Path(target_user_id): axum::extract::Path<Uuid>,
 ) -> impl IntoResponse {
@@ -142,6 +161,15 @@ pub async fn toggle_can_send_firsthand_handler(
                 .into_response();
         }
     };
+
+    audit::record(
+        AuditEvent::AdminUserPermissionChanged,
+        Some(admin.0.user_id),
+        &format!(
+            "target_user_id={} can_send_firsthand={}",
+            target_user_id, new_val
+        ),
+    );
 
     Html(render_toggle_td(
         new_val,

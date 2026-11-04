@@ -1,6 +1,7 @@
 use crate::db::{get_aliases_by_user_id, get_domains, insert_alias, is_subdomain_available};
 use crate::web::AppState;
 use crate::web::AuthenticatedUser;
+use crate::web::audit::{self, AuditEvent};
 use crate::web::handlers::{AliasesTemplate, MAX_ALIASES_PER_USER, generate_corporate_suggestions};
 use crate::web::i18n::{Locale, Messages};
 use axum::body::Body;
@@ -266,6 +267,12 @@ pub async fn create_alias_handler(
         }
         .into_response();
     }
+
+    audit::record(
+        AuditEvent::AliasCreated,
+        Some(user.user_id),
+        &format!("subdomain={} domain_id={}", subdomain, payload.domain_id),
+    );
 
     Response::builder()
         .header("HX-Redirect", "/aliases")

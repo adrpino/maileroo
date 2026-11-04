@@ -7,6 +7,7 @@ use crate::db::{
 use crate::disposable_domains::is_disposable;
 use crate::web::ThreadMessage;
 use crate::web::api_auth::{generate_api_key, hash_api_key};
+use crate::web::audit::{self, AuditEvent, hash_email, record_span_user};
 use crate::web::auth::{hash_password, verify_password_constant_time};
 use crate::web::i18n::{Locale, Messages};
 use crate::web::session::{csrf_clear_cookie_header, csrf_cookie_header, establish_session};
@@ -55,8 +56,9 @@ fn is_valid_email(email: &str) -> bool {
     re.is_match(email)
 }
 
-pub async fn logout_handler(_user: AuthenticatedUser, session: Session) -> Response {
+pub async fn logout_handler(user: AuthenticatedUser, session: Session) -> Response {
     let _ = session.flush().await;
+    audit::record(AuditEvent::Logout, Some(user.user_id), "");
 
     let cookie = csrf_clear_cookie_header();
 
@@ -152,6 +154,8 @@ pub async fn login_handler(
     {
         let client_ip = extract_client_ip(&headers, &extensions);
         let csrf_token = establish_session(&session, &user).await;
+        record_span_user(&extensions, user.id);
+        audit::record(AuditEvent::LoginSucceeded, Some(user.id), "");
 
         let _ = update_last_login(&state.db, user.id, Some(client_ip)).await;
 
@@ -168,6 +172,12 @@ pub async fn login_handler(
 
         return response;
     }
+
+    audit::record(
+        AuditEvent::LoginFailed,
+        None,
+        &format!("email_hash={}", hash_email(&payload.email)),
+    );
 
     LoginTemplate {
         error: Some(locale.invalid_credentials().to_string()),
@@ -225,6 +235,8 @@ pub async fn register_handler(
     match insert_user(&state.db, &payload.email, &hash).await {
         Ok(user) => {
             let csrf_token = establish_session(&session, &user).await;
+            record_span_user(&extensions, user.id);
+            audit::record(AuditEvent::UserRegistered, Some(user.id), "");
 
             // Registration logs the user in, so record it as their first login.
             let client_ip = extract_client_ip(&headers, &extensions);
@@ -486,7 +498,14 @@ pub async fn delete_alias_handler(
     Path(alias_id): Path<Uuid>,
 ) -> impl IntoResponse {
     match delete_alias_by_id(&state.db, alias_id, user.user_id).await {
-        Ok(_) => StatusCode::OK.into_response(),
+        Ok(_) => {
+            audit::record(
+                AuditEvent::AliasDeleted,
+                Some(user.user_id),
+                &format!("alias_id={}", alias_id),
+            );
+            StatusCode::OK.into_response()
+        }
         Err(e) => {
             tracing::error!("Error deleting alias: {}", e);
             (StatusCode::INTERNAL_SERVER_ERROR, "Database error").into_response()
@@ -536,6 +555,11 @@ pub async fn create_api_key_handler(
         tracing::error!("Error creating API key: {}", e);
         return (StatusCode::INTERNAL_SERVER_ERROR, "Database error").into_response();
     }
+    audit::record(
+        AuditEvent::ApiKeyCreated,
+        Some(user.0.user_id),
+        &format!("name={:?}", payload.name),
+    );
 
     let keys = get_api_keys(&state.db, user.0.user_id)
         .await
@@ -555,7 +579,14 @@ pub async fn delete_api_key_handler(
     Path(key_id): Path<Uuid>,
 ) -> impl IntoResponse {
     match delete_api_key(&state.db, key_id, user.0.user_id).await {
-        Ok(_) => StatusCode::OK.into_response(),
+        Ok(_) => {
+            audit::record(
+                AuditEvent::ApiKeyDeleted,
+                Some(user.0.user_id),
+                &format!("key_id={}", key_id),
+            );
+            StatusCode::OK.into_response()
+        }
         Err(_) => (StatusCode::INTERNAL_SERVER_ERROR, "Database error").into_response(),
     }
 }

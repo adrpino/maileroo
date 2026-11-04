@@ -3,6 +3,7 @@ pub mod alias_api;
 pub mod api;
 pub mod api_auth;
 pub mod attachments_form;
+pub mod audit;
 pub mod auth;
 pub mod autotls;
 pub mod dashboard;
@@ -18,6 +19,7 @@ pub mod session;
 
 use crate::config::get_config;
 use crate::db::{DbPool, get_user_by_id};
+use audit::{AuditEvent, forwarded_for, peer_addr, record_span_user};
 use axum::extract::{DefaultBodyLimit, FromRequestParts, State};
 use axum::{
     Json, Router,
@@ -262,6 +264,7 @@ where
             .await
             .map_err(|_| AuthError::SessionError)?
             .ok_or(AuthError::NotLoggedIn)?;
+        record_span_user(&parts.extensions, user_id);
 
         // CSRF Token Validation Check (Using Pure Function)
         let header_token = parts
@@ -428,6 +431,9 @@ pub async fn create_app(state: AppState) -> Router {
                 method = %request.method(),
                 uri = %request.uri(),
                 remote_addr = %remote_addr,
+                peer_addr = %peer_addr(request.extensions()),
+                forwarded_for = %forwarded_for(request.headers()),
+                user_id = tracing::field::Empty,
             )
         })
         .on_request(|request: &axum::http::Request<_>, _span: &tracing::Span| {
@@ -501,7 +507,7 @@ pub async fn create_app(state: AppState) -> Router {
             "/login",
             get(handlers::login_page)
                 .post(handlers::login_handler)
-                .layer(GovernorLayer::new(governor_conf.clone())),
+                .layer(GovernorLayer::new(governor_conf.clone()).error_handler(rate_limit_error)),
         )
         .route(
             "/auth/password-toggle",
@@ -512,7 +518,7 @@ pub async fn create_app(state: AppState) -> Router {
             "/register",
             get(handlers::register_page)
                 .post(handlers::register_handler)
-                .layer(GovernorLayer::new(governor_conf.clone())),
+                .layer(GovernorLayer::new(governor_conf.clone()).error_handler(rate_limit_error)),
         )
         .route("/dashboard", get(dashboard::dashboard_handler))
         .route("/api/sse/dashboard", get(dashboard::dashboard_sse_handler))
@@ -646,7 +652,9 @@ pub async fn create_app(state: AppState) -> Router {
         }
     };
 
-    app.layer(logging_layer).with_state(Arc::new(state))
+    app.layer(axum::middleware::from_fn(audit::capture_request_span))
+        .layer(logging_layer)
+        .with_state(Arc::new(state))
 }
 
 pub async fn run_web_server(
@@ -997,6 +1005,15 @@ impl tower_governor::key_extractor::KeyExtractor for TrustedProxyIpKeyExtractor 
         }
         Ok(rate_limit_key(resolved))
     }
+}
+
+/// Converts a rate limiter rejection into its default response, recording
+/// an audit event for rejected requests.
+fn rate_limit_error(err: tower_governor::GovernorError) -> Response {
+    if matches!(err, tower_governor::GovernorError::TooManyRequests { .. }) {
+        audit::record(AuditEvent::RateLimited, None, "");
+    }
+    Response::from(err)
 }
 
 /// Ensures the missing-`ConnectInfo` warning is logged only once per process.
