@@ -185,6 +185,17 @@ async fn test_registration_issues_csrf_token_and_allows_state_changing_requests(
             "csrf_token cookie must not be empty"
         );
 
+        // Registration logs the user in, so it must be recorded as their first login.
+        let registered = maileroo::db::get_user_by_email(&db, &email)
+            .await
+            .unwrap()
+            .expect("registered user should exist");
+        assert!(
+            registered.last_login_at.is_some(),
+            "registration must record last_login_at"
+        );
+        assert_eq!(registered.last_login_ip.as_deref(), Some("127.0.0.1"));
+
         // And that session must actually be able to POST, without re-logging in.
         common::create_test_alias(
             &db,

@@ -3,6 +3,7 @@ pub mod alias_api;
 pub mod api;
 pub mod api_auth;
 pub mod attachments_form;
+pub mod audit;
 pub mod auth;
 pub mod autotls;
 pub mod dashboard;
@@ -18,6 +19,7 @@ pub mod session;
 
 use crate::config::get_config;
 use crate::db::{DbPool, get_user_by_id};
+use audit::{AuditEvent, forwarded_for, peer_addr, record_span_user};
 use axum::extract::{DefaultBodyLimit, FromRequestParts, State};
 use axum::{
     Json, Router,
@@ -29,8 +31,8 @@ use axum::{
 };
 use send_email::MAX_UPLOAD_REQUEST_BYTES;
 use serde_json::{Value, json};
-use std::net::{IpAddr, SocketAddr};
-use std::sync::Arc;
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::sync::{Arc, Once};
 use uuid::Uuid;
 
 /// Renders an Askama template into an HTML response, logging internal rendering
@@ -262,6 +264,7 @@ where
             .await
             .map_err(|_| AuthError::SessionError)?
             .ok_or(AuthError::NotLoggedIn)?;
+        record_span_user(&parts.extensions, user_id);
 
         // CSRF Token Validation Check (Using Pure Function)
         let header_token = parts
@@ -428,6 +431,9 @@ pub async fn create_app(state: AppState) -> Router {
                 method = %request.method(),
                 uri = %request.uri(),
                 remote_addr = %remote_addr,
+                peer_addr = %peer_addr(request.extensions()),
+                forwarded_for = %forwarded_for(request.headers()),
+                user_id = tracing::field::Empty,
             )
         })
         .on_request(|request: &axum::http::Request<_>, _span: &tracing::Span| {
@@ -501,7 +507,7 @@ pub async fn create_app(state: AppState) -> Router {
             "/login",
             get(handlers::login_page)
                 .post(handlers::login_handler)
-                .layer(GovernorLayer::new(governor_conf.clone())),
+                .layer(GovernorLayer::new(governor_conf.clone()).error_handler(rate_limit_error)),
         )
         .route(
             "/auth/password-toggle",
@@ -512,7 +518,7 @@ pub async fn create_app(state: AppState) -> Router {
             "/register",
             get(handlers::register_page)
                 .post(handlers::register_handler)
-                .layer(GovernorLayer::new(governor_conf.clone())),
+                .layer(GovernorLayer::new(governor_conf.clone()).error_handler(rate_limit_error)),
         )
         .route("/dashboard", get(dashboard::dashboard_handler))
         .route("/api/sse/dashboard", get(dashboard::dashboard_sse_handler))
@@ -646,7 +652,9 @@ pub async fn create_app(state: AppState) -> Router {
         }
     };
 
-    app.layer(logging_layer).with_state(Arc::new(state))
+    app.layer(axum::middleware::from_fn(audit::capture_request_span))
+        .layer(logging_layer)
+        .with_state(Arc::new(state))
 }
 
 pub async fn run_web_server(
@@ -985,9 +993,42 @@ impl tower_governor::key_extractor::KeyExtractor for TrustedProxyIpKeyExtractor 
             .get("x-forwarded-for")
             .and_then(|val| val.to_str().ok());
 
-        resolve_client_ip(peer_ip, xff, self.trusted_proxy)
-            .ok_or(tower_governor::GovernorError::UnableToExtractKey)
+        let resolved = resolve_client_ip(peer_ip, xff, self.trusted_proxy);
+        if resolved.is_none() {
+            MISSING_CONNECT_INFO_WARNING.call_once(|| {
+                tracing::warn!(
+                    "Rate limiter could not resolve the client IP because ConnectInfo is \
+                     missing; all clients share a single rate-limit bucket. Serve the router \
+                     with `into_make_service_with_connect_info::<SocketAddr>()`."
+                );
+            });
+        }
+        Ok(rate_limit_key(resolved))
     }
+}
+
+/// Converts a rate limiter rejection into its default response, recording
+/// an audit event for rejected requests.
+fn rate_limit_error(err: tower_governor::GovernorError) -> Response {
+    if matches!(err, tower_governor::GovernorError::TooManyRequests { .. }) {
+        audit::record(AuditEvent::RateLimited, None, "");
+    }
+    Response::from(err)
+}
+
+/// Ensures the missing-`ConnectInfo` warning is logged only once per process.
+static MISSING_CONNECT_INFO_WARNING: Once = Once::new();
+
+/// Key shared by every client when the peer address cannot be determined.
+pub const FALLBACK_RATE_LIMIT_KEY: IpAddr = IpAddr::V4(Ipv4Addr::UNSPECIFIED);
+
+/// Pure function mapping a resolved client IP to its rate-limit key.
+///
+/// When the client IP is unknown (e.g. the router is served without
+/// `ConnectInfo`), all requests share `FALLBACK_RATE_LIMIT_KEY` so that
+/// rate limiting degrades gracefully instead of failing every request.
+pub fn rate_limit_key(resolved: Option<IpAddr>) -> IpAddr {
+    resolved.unwrap_or(FALLBACK_RATE_LIMIT_KEY)
 }
 
 pub fn extract_client_ip(
@@ -1241,6 +1282,26 @@ mod tests {
             resolve_client_ip(None, Some("203.0.113.99"), Some(proxy)),
             None
         );
+    }
+
+    #[test]
+    fn test_rate_limit_key_falls_back_when_ip_unknown() {
+        let client: IpAddr = "203.0.113.99".parse().unwrap();
+        assert_eq!(rate_limit_key(Some(client)), client);
+        assert_eq!(rate_limit_key(None), FALLBACK_RATE_LIMIT_KEY);
+    }
+
+    #[test]
+    fn test_key_extractor_without_connect_info_does_not_error() {
+        use tower_governor::key_extractor::KeyExtractor;
+        let extractor = TrustedProxyIpKeyExtractor {
+            trusted_proxy: None,
+        };
+        let req = axum::http::Request::builder()
+            .uri("/login")
+            .body(())
+            .unwrap();
+        assert_eq!(extractor.extract(&req).unwrap(), FALLBACK_RATE_LIMIT_KEY);
     }
 
     #[tokio::test]
