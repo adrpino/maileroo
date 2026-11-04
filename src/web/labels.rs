@@ -14,6 +14,7 @@ use crate::db::labels::{
     remove_label_from_email,
 };
 use crate::filter::BackfillJob;
+use crate::web::audit::{self, AuditEvent};
 use crate::web::i18n::{Locale, Messages};
 use crate::web::{AppState, AuthenticatedUser, impl_into_response_for_template};
 
@@ -188,7 +189,16 @@ pub async fn create_filter_handler(
         .filter(|k| !k.is_empty())
         .collect();
     for kw in keywords {
-        let _ = insert_filter(&state.db, user.user_id, kw, form.label_id).await;
+        if insert_filter(&state.db, user.user_id, kw, form.label_id)
+            .await
+            .is_ok()
+        {
+            audit::record(
+                AuditEvent::FilterCreated,
+                Some(user.user_id),
+                &format!("label_id={}", form.label_id),
+            );
+        }
         if form.apply_to_existing == Some(true) {
             state.backfill_engine.submit(BackfillJob {
                 user_id: user.user_id,
@@ -223,7 +233,16 @@ pub async fn delete_filter_handler(
     State(state): State<Arc<AppState>>,
     Path(filter_id): Path<Uuid>,
 ) -> impl IntoResponse {
-    let _ = delete_filter(&state.db, filter_id, user.user_id).await;
+    if delete_filter(&state.db, filter_id, user.user_id)
+        .await
+        .is_ok()
+    {
+        audit::record(
+            AuditEvent::FilterDeleted,
+            Some(user.user_id),
+            &format!("filter_id={}", filter_id),
+        );
+    }
     state.filter_engine.invalidate(&user.user_id);
 
     let labels = get_labels_by_user(&state.db, user.user_id)
