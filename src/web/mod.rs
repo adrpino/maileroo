@@ -19,6 +19,8 @@ pub mod session;
 
 use crate::config::get_config;
 use crate::db::{DbPool, get_user_by_id};
+use crate::limits::network_of;
+use alias_api::AliasGuesses;
 use audit::{AuditEvent, forwarded_for, peer_addr, record_span_user};
 use axum::extract::{DefaultBodyLimit, FromRequestParts, State};
 use axum::{
@@ -617,6 +619,7 @@ pub async fn create_app(state: AppState) -> Router {
         )
         .route("/static/htmx.min.js", get(htmx_js_handler))
         .route("/static/sse.js", get(sse_js_handler))
+        .layer(axum::Extension(Arc::new(AliasGuesses::default())))
         .layer(axum::middleware::from_fn(crawler_filter))
         .layer(CompressionLayer::new());
 
@@ -1027,14 +1030,17 @@ pub const FALLBACK_RATE_LIMIT_KEY: IpAddr = IpAddr::V4(Ipv4Addr::UNSPECIFIED);
 /// When the client IP is unknown (e.g. the router is served without
 /// `ConnectInfo`), all requests share `FALLBACK_RATE_LIMIT_KEY` so that
 /// rate limiting degrades gracefully instead of failing every request.
+/// IPv6 clients are keyed by their /64 network, so one host can't dodge the limit by
+/// rotating addresses within it.
 pub fn rate_limit_key(resolved: Option<IpAddr>) -> IpAddr {
-    resolved.unwrap_or(FALLBACK_RATE_LIMIT_KEY)
+    resolved.map(network_of).unwrap_or(FALLBACK_RATE_LIMIT_KEY)
 }
 
-pub fn extract_client_ip(
+/// The client's IP address, as [`resolve_client_ip`] determines it from the request.
+pub fn client_ip(
     headers: &axum::http::HeaderMap,
     extensions: &axum::http::Extensions,
-) -> String {
+) -> Option<IpAddr> {
     let peer_ip = extensions
         .get::<axum::extract::ConnectInfo<SocketAddr>>()
         .map(|ci| ci.0.ip());
@@ -1044,6 +1050,13 @@ pub fn extract_client_ip(
     let trusted_proxy = parse_trusted_proxy(&get_config("TRUSTED_PROXY", ""));
 
     resolve_client_ip(peer_ip, xff, trusted_proxy)
+}
+
+pub fn extract_client_ip(
+    headers: &axum::http::HeaderMap,
+    extensions: &axum::http::Extensions,
+) -> String {
+    client_ip(headers, extensions)
         .map(|ip| ip.to_string())
         .unwrap_or_else(|| "unknown".into())
 }
@@ -1289,6 +1302,13 @@ mod tests {
         let client: IpAddr = "203.0.113.99".parse().unwrap();
         assert_eq!(rate_limit_key(Some(client)), client);
         assert_eq!(rate_limit_key(None), FALLBACK_RATE_LIMIT_KEY);
+    }
+
+    #[test]
+    fn test_rate_limit_key_groups_ipv6_by_64_network() {
+        let a: IpAddr = "2001:db8:1:2::1".parse().unwrap();
+        let b: IpAddr = "2001:db8:1:2:ffff::9".parse().unwrap();
+        assert_eq!(rate_limit_key(Some(a)), rate_limit_key(Some(b)));
     }
 
     #[test]

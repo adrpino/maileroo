@@ -6,6 +6,7 @@ pub mod dns;
 pub mod filter;
 pub mod fs;
 pub mod inbound;
+pub mod limits;
 pub mod outbound;
 pub mod server;
 pub mod web;

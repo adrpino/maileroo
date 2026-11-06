@@ -4,6 +4,7 @@ use crate::filter::FilterEngine;
 use crate::fs::write_file_sync_with_permissions;
 use crate::inbound::acceptor::HotReloadAcceptor;
 use crate::inbound::parser::{AttachmentMetadata, EmailMetadata, extract_full_metadata};
+use crate::inbound::rate_limit::MissVerdict;
 use crate::outbound::OutboundService;
 use crate::outbound::mime::prepare_reply_for_relay;
 use pin_project_lite::pin_project;
@@ -247,7 +248,6 @@ pub struct SmtpSession {
     tx: tokio::sync::broadcast::Sender<crate::web::DashboardEvent>,
     peer_ip: std::net::IpAddr,
     rate_limiter: Arc<crate::inbound::rate_limit::RateLimiter>,
-    blocklist: Arc<crate::inbound::blocklist::Blocklist>,
     limits: crate::inbound::rate_limit::InboundLimits,
     filter_engine: FilterEngine,
 }
@@ -284,7 +284,6 @@ impl SmtpSession {
         tx: tokio::sync::broadcast::Sender<crate::web::DashboardEvent>,
         peer_ip: std::net::IpAddr,
         rate_limiter: Arc<crate::inbound::rate_limit::RateLimiter>,
-        blocklist: Arc<crate::inbound::blocklist::Blocklist>,
         limits: crate::inbound::rate_limit::InboundLimits,
     ) -> Self {
         Self {
@@ -304,7 +303,6 @@ impl SmtpSession {
             tx,
             peer_ip,
             rate_limiter,
-            blocklist,
             limits,
             filter_engine: FilterEngine::default(),
         }
@@ -330,6 +328,49 @@ impl SmtpSession {
         Ok(())
     }
 
+    /// Answers "no such user" for `addr` and counts it as a miss for the caller's network:
+    /// past the tarpit threshold the answer is slowed down (still a permanent 550, so a
+    /// legitimate server gives up instead of retrying), and past the block threshold the
+    /// network is refused for a while and the connection is closed.
+    async fn refuse_unknown_recipient(&mut self, addr: &str) -> Result<(), std::io::Error> {
+        let now = std::time::Instant::now();
+        let misses = self.rate_limiter.record_failure(self.peer_ip, now);
+        match self.limits.verdict(misses) {
+            MissVerdict::Reject => self.write_line("550 User Not Found").await,
+            MissVerdict::Tarpit => {
+                tracing::warn!(
+                    "IP {} has {} unknown recipients this hour ({}). Slowing down.",
+                    self.peer_ip,
+                    misses,
+                    addr
+                );
+                tokio::time::sleep(std::time::Duration::from_secs(
+                    self.limits.tarpit_duration_secs,
+                ))
+                .await;
+                self.write_line("550 User Not Found").await
+            }
+            MissVerdict::Block => {
+                tracing::warn!(
+                    "IP {} has {} unknown recipients this hour. Blocking its network for {}s.",
+                    self.peer_ip,
+                    misses,
+                    self.limits.block_duration_secs
+                );
+                self.rate_limiter.block(
+                    self.peer_ip,
+                    now + std::time::Duration::from_secs(self.limits.block_duration_secs),
+                );
+                self.write_line("554 5.7.1 Too many unknown recipients, try again later")
+                    .await?;
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::ConnectionAborted,
+                    "IP blocked due to excessive failures",
+                ))
+            }
+        }
+    }
+
     async fn handle_rcpt_to(&mut self, cmd: &str) -> Result<(), std::io::Error> {
         match Self::extract_recipient(cmd) {
             None => {
@@ -352,8 +393,7 @@ impl SmtpSession {
                         Ok(Some(m)) => m,
                         Ok(None) => {
                             tracing::warn!("Unknown or inactive reply token: {}", local_part);
-                            self.write_line("550 User Not Found").await?;
-                            return Ok(());
+                            return self.refuse_unknown_recipient(&addr).await;
                         }
                         Err(e) => {
                             tracing::error!("Database error during reply token lookup: {}", e);
@@ -414,8 +454,7 @@ impl SmtpSession {
                                 "Incoming SRS signature validation failed for recipient: {}",
                                 addr
                             );
-                            self.write_line("550 User Not Found").await?;
-                            return Ok(());
+                            return self.refuse_unknown_recipient(&addr).await;
                         }
                     }
                 } else {
@@ -427,8 +466,7 @@ impl SmtpSession {
                         if let Some(parts) = original_sender.split_once('@') {
                             parts
                         } else {
-                            self.write_line("550 User Not Found").await?;
-                            return Ok(());
+                            return self.refuse_unknown_recipient(&addr).await;
                         }
                     } else {
                         (local_part, full_domain)
@@ -455,41 +493,7 @@ impl SmtpSession {
                             addr,
                             self.peer_ip
                         );
-
-                        let failures = self.rate_limiter.record_failure(self.peer_ip);
-
-                        if failures >= self.limits.block_threshold {
-                            tracing::warn!(
-                                "IP {} reached block threshold ({}). Adding to blocklist and rejecting.",
-                                self.peer_ip,
-                                failures
-                            );
-
-                            let _ = self.blocklist.add_ip(self.peer_ip);
-
-                            self.write_line("554 5.7.1 Connection refused - IP address blocked")
-                                .await?;
-                            return Err(std::io::Error::new(
-                                std::io::ErrorKind::ConnectionAborted,
-                                "IP blocked due to excessive failures",
-                            ));
-                        } else if failures >= self.limits.tarpit_threshold {
-                            tracing::warn!(
-                                "IP {} exceeded tarpit threshold ({}). Tarpitting and rejecting.",
-                                self.peer_ip,
-                                failures
-                            );
-
-                            // Tarpit the connection using the parameterized duration
-                            tokio::time::sleep(std::time::Duration::from_secs(
-                                self.limits.tarpit_duration_secs,
-                            ))
-                            .await;
-
-                            self.write_line("451 4.7.1 Please try again later").await?;
-                        } else {
-                            self.write_line("550 User Not Found").await?;
-                        }
+                        return self.refuse_unknown_recipient(&addr).await;
                     }
                     Err(e) => {
                         tracing::error!("Database error during recipient resolution: {}", e);
@@ -1063,12 +1067,11 @@ mod tests {
             temp_dir.path().to_path_buf(),
         ));
 
-        let blocklist_path = temp_dir.path().join("blockips.conf");
-        let blocklist = Arc::new(crate::inbound::blocklist::Blocklist::new(blocklist_path));
         let limits = crate::inbound::rate_limit::InboundLimits {
             tarpit_threshold: 5,
             block_threshold: 10,
             tarpit_duration_secs: 5,
+            ..Default::default()
         };
 
         let mut session = SmtpSession::new(
@@ -1080,7 +1083,6 @@ mod tests {
             tx,
             "127.0.0.1".parse().unwrap(),
             rate_limiter,
-            blocklist,
             limits,
         );
 
@@ -1131,12 +1133,11 @@ mod tests {
             temp_dir.path().to_path_buf(),
         ));
 
-        let blocklist_path = temp_dir.path().join("blockips.conf");
-        let blocklist = Arc::new(crate::inbound::blocklist::Blocklist::new(blocklist_path));
         let limits = crate::inbound::rate_limit::InboundLimits {
             tarpit_threshold: 5,
             block_threshold: 10,
             tarpit_duration_secs: 5,
+            ..Default::default()
         };
 
         let mut session = SmtpSession::new(
@@ -1148,7 +1149,6 @@ mod tests {
             tx,
             "127.0.0.1".parse().unwrap(),
             rate_limiter,
-            blocklist,
             limits,
         );
 
