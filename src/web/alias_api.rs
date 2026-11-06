@@ -1,19 +1,25 @@
-use crate::db::{get_aliases_by_user_id, get_domains, insert_alias, is_subdomain_available};
-use crate::web::AppState;
-use crate::web::AuthenticatedUser;
+use crate::db::{
+    get_alias_count, get_aliases_by_user_id, get_domains, get_user_by_id, insert_alias,
+    is_subdomain_available,
+};
+use crate::limits::{Windows, network_of};
 use crate::web::audit::{self, AuditEvent};
 use crate::web::handlers::{AliasesTemplate, MAX_ALIASES_PER_USER, generate_corporate_suggestions};
 use crate::web::i18n::{Locale, Messages};
+use crate::web::{AppState, AuthenticatedUser, client_ip};
 use axum::body::Body;
 use axum::response::Response;
 use axum::{
+    Extension,
     extract::{Form, State},
-    http::StatusCode,
+    http::{Extensions, HeaderMap, StatusCode},
     response::IntoResponse,
 };
 use regex::Regex;
 use serde::Deserialize;
+use std::net::IpAddr;
 use std::sync::{Arc, OnceLock};
+use std::time::{Duration, Instant};
 use uuid::Uuid;
 
 #[derive(Deserialize)]
@@ -118,34 +124,89 @@ pub fn validate_alias(subdomain: &str, is_admin: bool) -> Result<(), AliasError>
     Ok(())
 }
 
+/// "Taken" answers one account may get from the alias form in an hour.
+pub const TAKEN_ANSWERS_PER_ACCOUNT_PER_HOUR: u32 = 10;
+/// "Taken" answers all accounts on one network may get from the alias form in an hour.
+pub const TAKEN_ANSWERS_PER_NETWORK_PER_HOUR: u32 = 30;
+
+/// Limits how often the alias form may answer "taken", so it can't be used to find out
+/// which addresses exist. Counted per account and per client network; once either is
+/// exhausted the form refuses every name until the hour is over, since answering only
+/// for free names would still reveal the taken ones. Administrators are not limited.
+pub struct AliasGuesses {
+    per_account: Windows<Uuid>,
+    per_network: Windows<IpAddr>,
+}
+
+impl Default for AliasGuesses {
+    fn default() -> Self {
+        let hour = Duration::from_secs(3600);
+        Self {
+            per_account: Windows::new(hour),
+            per_network: Windows::new(hour),
+        }
+    }
+}
+
+impl AliasGuesses {
+    /// Whether `user` (or its network) has had all its "taken" answers this hour.
+    pub fn exhausted(&self, user: Uuid, ip: Option<IpAddr>, now: Instant) -> bool {
+        self.per_account.current(&user, now) >= TAKEN_ANSWERS_PER_ACCOUNT_PER_HOUR
+            || ip.is_some_and(|ip| {
+                self.per_network.current(&network_of(ip), now) >= TAKEN_ANSWERS_PER_NETWORK_PER_HOUR
+            })
+    }
+
+    /// Counts one "taken" answer for `user` and its network.
+    pub fn count_taken(&self, user: Uuid, ip: Option<IpAddr>, now: Instant) {
+        self.per_account.count(user, now);
+        if let Some(ip) = ip {
+            self.per_network.count(network_of(ip), now);
+        }
+    }
+}
+
+/// The aliases page again, showing `error` above the form.
+async fn aliases_page_with_error(
+    state: &AppState,
+    user: &AuthenticatedUser,
+    locale: Locale,
+    domain_id: Uuid,
+    error: String,
+) -> Response {
+    let aliases = get_aliases_by_user_id(&state.db, user.user_id)
+        .await
+        .unwrap_or_default();
+    let domains = get_domains(&state.db).await.unwrap_or_default();
+    let suggestions = generate_corporate_suggestions(&state.db, domain_id).await;
+
+    AliasesTemplate {
+        aliases,
+        domains,
+        suggestions,
+        error: Some(error),
+        max_aliases: MAX_ALIASES_PER_USER,
+        locale,
+        can_bypass_limit: user.can_bypass_alias_limit(),
+    }
+    .into_response()
+}
+
 pub async fn create_alias_handler(
     locale: Locale,
     user: AuthenticatedUser,
     State(state): State<Arc<AppState>>,
+    Extension(guesses): Extension<Arc<AliasGuesses>>,
+    headers: HeaderMap,
+    extensions: Extensions,
     Form(payload): Form<CreateAliasRequest>,
 ) -> impl IntoResponse {
     // 0. Limit check for non-admin users
     if !user.can_bypass_alias_limit() {
-        let count = crate::db::get_alias_count(&state.db, user.user_id)
-            .await
-            .unwrap_or(0);
+        let count = get_alias_count(&state.db, user.user_id).await.unwrap_or(0);
         if count >= MAX_ALIASES_PER_USER {
-            let aliases = get_aliases_by_user_id(&state.db, user.user_id)
-                .await
-                .unwrap_or_default();
-            let domains = get_domains(&state.db).await.unwrap_or_default();
-            let suggestions = generate_corporate_suggestions(&state.db, payload.domain_id).await;
-
-            return AliasesTemplate {
-                aliases,
-                domains,
-                suggestions,
-                error: Some(locale.error_alias_limit_reached(MAX_ALIASES_PER_USER)),
-                max_aliases: MAX_ALIASES_PER_USER,
-                locale,
-                can_bypass_limit: user.can_bypass_alias_limit(),
-            }
-            .into_response();
+            let error = locale.error_alias_limit_reached(MAX_ALIASES_PER_USER);
+            return aliases_page_with_error(&state, &user, locale, payload.domain_id, error).await;
         }
     }
 
@@ -156,85 +217,40 @@ pub async fn create_alias_handler(
         .unwrap_or_else(|| "info".to_string());
 
     // 1. Validation logic
-    match validate_alias(&subdomain, user.is_admin) {
-        Err(AliasError::TooLong) => {
-            let aliases = get_aliases_by_user_id(&state.db, user.user_id)
-                .await
-                .unwrap_or_default();
-            let domains = get_domains(&state.db).await.unwrap_or_default();
-            let suggestions = generate_corporate_suggestions(&state.db, payload.domain_id).await;
-            return AliasesTemplate {
-                aliases,
-                domains,
-                suggestions,
-                error: Some(locale.error_alias_too_long(32)),
-                max_aliases: MAX_ALIASES_PER_USER,
-                locale,
-                can_bypass_limit: user.can_bypass_alias_limit(),
-            }
-            .into_response();
-        }
-        Err(AliasError::Reserved) => {
-            let aliases = get_aliases_by_user_id(&state.db, user.user_id)
-                .await
-                .unwrap_or_default();
-            let domains = get_domains(&state.db).await.unwrap_or_default();
-            let suggestions = generate_corporate_suggestions(&state.db, payload.domain_id).await;
-            return AliasesTemplate {
-                aliases,
-                domains,
-                suggestions,
-                error: Some(locale.error_alias_reserved().to_string()),
-                max_aliases: MAX_ALIASES_PER_USER,
-                locale,
-                can_bypass_limit: user.can_bypass_alias_limit(),
-            }
-            .into_response();
-        }
-        Err(AliasError::InvalidFormat) => {
-            let aliases = get_aliases_by_user_id(&state.db, user.user_id)
-                .await
-                .unwrap_or_default();
-            let domains = get_domains(&state.db).await.unwrap_or_default();
-            let suggestions = generate_corporate_suggestions(&state.db, payload.domain_id).await;
-            return AliasesTemplate {
-                aliases,
-                domains,
-                suggestions,
-                error: Some(locale.error_alias_invalid_format().to_string()),
-                max_aliases: MAX_ALIASES_PER_USER,
-                locale,
-                can_bypass_limit: user.can_bypass_alias_limit(),
-            }
-            .into_response();
-        }
-        Ok(_) => {}
+    let invalid = match validate_alias(&subdomain, user.is_admin) {
+        Err(AliasError::TooLong) => Some(locale.error_alias_too_long(32)),
+        Err(AliasError::Reserved) => Some(locale.error_alias_reserved().to_string()),
+        Err(AliasError::InvalidFormat) => Some(locale.error_alias_invalid_format().to_string()),
+        Ok(_) => None,
+    };
+    if let Some(error) = invalid {
+        return aliases_page_with_error(&state, &user, locale, payload.domain_id, error).await;
     }
 
-    // 2. Race condition check: Final availability verification
+    // 2. Stop answering once too many names tried were taken
+    let now = Instant::now();
+    let ip = client_ip(&headers, &extensions);
+    if !user.is_admin && guesses.exhausted(user.user_id, ip, now) {
+        audit::record(
+            AuditEvent::RateLimited,
+            Some(user.user_id),
+            "alias name checks",
+        );
+        let error = locale.error_alias_too_many_tries().to_string();
+        return aliases_page_with_error(&state, &user, locale, payload.domain_id, error).await;
+    }
+
+    // 3. Race condition check: Final availability verification
     if !is_subdomain_available(&state.db, payload.domain_id, &subdomain)
         .await
         .unwrap_or(false)
     {
-        let aliases = get_aliases_by_user_id(&state.db, user.user_id)
-            .await
-            .unwrap_or_default();
-        let domains = get_domains(&state.db).await.unwrap_or_default();
-        let suggestions = generate_corporate_suggestions(&state.db, payload.domain_id).await;
-
-        return AliasesTemplate {
-            aliases,
-            domains,
-            suggestions,
-            error: Some(locale.error_alias_taken().to_string()),
-            max_aliases: MAX_ALIASES_PER_USER,
-            locale,
-            can_bypass_limit: user.can_bypass_alias_limit(),
-        }
-        .into_response();
+        guesses.count_taken(user.user_id, ip, now);
+        let error = locale.error_alias_taken().to_string();
+        return aliases_page_with_error(&state, &user, locale, payload.domain_id, error).await;
     }
 
-    let user_record = match crate::db::get_user_by_id(&state.db, user.user_id).await {
+    let user_record = match get_user_by_id(&state.db, user.user_id).await {
         Ok(Some(u)) => u,
         _ => return (StatusCode::INTERNAL_SERVER_ERROR, "User not found").into_response(),
     };
@@ -250,22 +266,9 @@ pub async fn create_alias_handler(
     .await
     {
         tracing::error!("Error inserting alias: {}", e);
-        let aliases = get_aliases_by_user_id(&state.db, user.user_id)
-            .await
-            .unwrap_or_default();
-        let domains = get_domains(&state.db).await.unwrap_or_default();
-        let suggestions = generate_corporate_suggestions(&state.db, payload.domain_id).await;
-
-        return AliasesTemplate {
-            aliases,
-            domains,
-            suggestions,
-            error: Some(locale.error_alias_taken().to_string()),
-            max_aliases: MAX_ALIASES_PER_USER,
-            locale,
-            can_bypass_limit: user.can_bypass_alias_limit(),
-        }
-        .into_response();
+        guesses.count_taken(user.user_id, ip, now);
+        let error = locale.error_alias_taken().to_string();
+        return aliases_page_with_error(&state, &user, locale, payload.domain_id, error).await;
     }
 
     audit::record(

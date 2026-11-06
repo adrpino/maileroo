@@ -130,6 +130,7 @@ pub trait Messages {
     fn delete_email_message(&self, subject: &str) -> String;
     fn error_alias_limit_reached(&self, max: i64) -> String;
     fn error_alias_taken(&self) -> &'static str;
+    fn error_alias_too_many_tries(&self) -> &'static str;
     fn error_alias_reserved(&self) -> &'static str;
     fn error_alias_invalid_format(&self) -> &'static str;
     fn error_alias_too_long(&self, max: usize) -> String;
@@ -1090,6 +1091,21 @@ impl Messages for Locale {
             Locale::Es => "Lo sentimos, este alias acaba de ser ocupado. Por favor elige otro.",
             Locale::Fr => "Désolé, cet alias vient d'être pris. Veuillez en choisir un autre.",
             Locale::Pt => "Desculpe, este alias já foi ocupado. Por favor, escolha outro.",
+        }
+    }
+
+    fn error_alias_too_many_tries(&self) -> &'static str {
+        match self {
+            Locale::En => "Too many of the names you tried are taken. Please try again in an hour.",
+            Locale::Es => {
+                "Demasiados de los nombres que has probado están ocupados. Vuelve a intentarlo en una hora."
+            }
+            Locale::Fr => {
+                "Trop de noms que vous avez essayés sont déjà pris. Veuillez réessayer dans une heure."
+            }
+            Locale::Pt => {
+                "Muitos dos nomes que tentou já estão ocupados. Tente novamente dentro de uma hora."
+            }
         }
     }
 

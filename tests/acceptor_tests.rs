@@ -5,7 +5,6 @@ use maileroo::inbound::protocol::SmtpSession;
 use maileroo::inbound::rate_limit::RateLimiter;
 use maileroo::outbound::OutboundService;
 use maileroo::web::DashboardEvent;
-use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{TcpListener, TcpStream};
@@ -39,9 +38,6 @@ async fn test_hot_reload_acceptor_lazy_loading_and_rejection() {
             temp_dir.path().to_path_buf(),
         ));
         let rate_limiter = Arc::new(RateLimiter::new());
-        let blocklist = Arc::new(maileroo::inbound::blocklist::Blocklist::new(PathBuf::from(
-            "dummy.conf",
-        )));
         let limits = maileroo::inbound::rate_limit::InboundLimits::from_env();
 
         // --- Scenario A: STARTTLS with Lazy Loading Acceptor (Returns 454) ---
@@ -71,7 +67,6 @@ async fn test_hot_reload_acceptor_lazy_loading_and_rejection() {
             tx.clone(),
             local_addr.ip(),
             rate_limiter.clone(),
-            blocklist.clone(),
             limits,
         );
 
@@ -112,7 +107,6 @@ async fn test_hot_reload_acceptor_lazy_loading_and_rejection() {
             tx.clone(),
             local_addr.ip(),
             rate_limiter.clone(),
-            blocklist.clone(),
             limits,
         );
 
@@ -178,7 +172,6 @@ async fn test_hot_reload_acceptor_lazy_loading_and_rejection() {
             tx.clone(),
             local_addr.ip(),
             rate_limiter.clone(),
-            blocklist.clone(),
             limits,
         );
 

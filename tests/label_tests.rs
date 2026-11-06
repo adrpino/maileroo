@@ -11,7 +11,6 @@ use maileroo::db::{
 };
 use maileroo::filter::FilterEngine;
 use maileroo::inbound::acceptor::HotReloadAcceptor;
-use maileroo::inbound::blocklist::Blocklist;
 use maileroo::inbound::protocol::SmtpSession;
 use maileroo::inbound::rate_limit::{InboundLimits, RateLimiter};
 use maileroo::outbound::OutboundService;
@@ -397,12 +396,11 @@ async fn test_smtp_end_to_end_body_filtering_and_multi_labeling() {
         let local_addr = listener.local_addr().unwrap();
 
         let rate_limiter = Arc::new(RateLimiter::new());
-        let block_path = temp_dir.path().join("blockips.conf");
-        let blocklist = Arc::new(Blocklist::new(block_path));
         let limits = InboundLimits {
             tarpit_threshold: 5,
             block_threshold: 10,
             tarpit_duration_secs: 5,
+            ..Default::default()
         };
 
         let filter_engine = FilterEngine::new();
@@ -412,7 +410,6 @@ async fn test_smtp_end_to_end_body_filtering_and_multi_labeling() {
         let outbound_clone = outbound.clone();
         let tx_clone = tx.clone();
         let rate_limiter_clone = rate_limiter.clone();
-        let blocklist_clone = blocklist.clone();
         let filter_engine_clone = filter_engine.clone();
 
         tokio::spawn(async move {
@@ -426,7 +423,6 @@ async fn test_smtp_end_to_end_body_filtering_and_multi_labeling() {
                 tx_clone,
                 "127.0.0.1".parse().unwrap(),
                 rate_limiter_clone,
-                blocklist_clone,
                 limits,
             )
             .with_filter_engine(filter_engine_clone);

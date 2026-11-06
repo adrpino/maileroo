@@ -7,11 +7,13 @@ use axum::{
 use maileroo::db::DbPool;
 use maileroo::inbound::acceptor::HotReloadAcceptor;
 use maileroo::inbound::protocol::SmtpSession;
-use maileroo::inbound::rate_limit::RateLimiter;
+use maileroo::inbound::rate_limit::{InboundLimits, RateLimiter};
 use maileroo::outbound::OutboundService;
 use maileroo::web::{AppState, DashboardEvent, create_app};
 use std::sync::Arc;
+use std::time::Instant;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::net::tcp::OwnedReadHalf;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::broadcast;
 use tower::util::ServiceExt;
@@ -66,12 +68,11 @@ async fn test_complete_smtp_to_http_dashboard_lifecycle() {
         let tx_clone = tx.clone();
         let rate_limiter_clone = rate_limiter.clone();
 
-        let block_path = temp_dir.path().join("blockips.conf");
-        let blocklist = Arc::new(maileroo::inbound::blocklist::Blocklist::new(block_path));
         let limits = maileroo::inbound::rate_limit::InboundLimits {
             tarpit_threshold: 5,
             block_threshold: 10,
             tarpit_duration_secs: 5,
+            ..Default::default()
         };
 
         // Spawn server accept task
@@ -86,7 +87,6 @@ async fn test_complete_smtp_to_http_dashboard_lifecycle() {
                 tx_clone,
                 "127.0.0.1".parse().unwrap(),
                 rate_limiter_clone,
-                blocklist,
                 limits,
             );
             session.handle().await.unwrap();
@@ -258,12 +258,11 @@ async fn test_incoming_srs_bounce_handling() {
         let tx_clone = tx.clone();
         let rate_limiter_clone = rate_limiter.clone();
 
-        let block_path = temp_dir.path().join("blockips.conf");
-        let blocklist = Arc::new(maileroo::inbound::blocklist::Blocklist::new(block_path));
         let limits = maileroo::inbound::rate_limit::InboundLimits {
             tarpit_threshold: 5,
             block_threshold: 10,
             tarpit_duration_secs: 5,
+            ..Default::default()
         };
 
         // Generate valid SRS address: encoding "hello@example.com" via SRS for forwarding
@@ -281,7 +280,6 @@ async fn test_incoming_srs_bounce_handling() {
                 tx_clone,
                 "127.0.0.1".parse().unwrap(),
                 rate_limiter_clone,
-                blocklist,
                 limits,
             );
             session.handle().await.unwrap();
@@ -347,8 +345,6 @@ async fn test_incoming_srs_bounce_handling() {
         common::generate_dummy_certs(&cert_path2, &key_path2);
         let tls_acceptor = HotReloadAcceptor::new(cert_path2, key_path2, std::time::Duration::from_millis(100)).unwrap();
 
-        let blocklist_clone = Arc::new(maileroo::inbound::blocklist::Blocklist::new(temp_dir.path().join("blockips2.conf")));
-
         tokio::spawn(async move {
             let (socket, _) = listener.accept().await.unwrap();
             let mut session = SmtpSession::new(
@@ -360,7 +356,6 @@ async fn test_incoming_srs_bounce_handling() {
                 tx_clone,
                 "127.0.0.1".parse().unwrap(),
                 rate_limiter_clone,
-                blocklist_clone,
                 limits,
             );
             session.handle().await.unwrap();
@@ -455,4 +450,96 @@ async fn test_incoming_srs_bounce_handling() {
         assert_eq!(emails.len(), 1);
         assert_eq!(emails[0].0, Some("SRS Bounce Test".to_string()));
     }).await;
+}
+
+/// Reads one SMTP reply, skipping the continuation lines of a multi-line one.
+async fn read_reply(reader: &mut BufReader<OwnedReadHalf>) -> String {
+    loop {
+        let mut line = String::new();
+        reader.read_line(&mut line).await.unwrap();
+        if line.len() < 4 || line.as_bytes()[3] != b'-' {
+            return line;
+        }
+    }
+}
+
+/// Unknown recipients count against the client: past the tarpit threshold the answer is
+/// still a permanent 550 (so legitimate senders stop retrying), and past the block
+/// threshold the client is blocked and disconnected.
+#[tokio::test]
+async fn test_unknown_recipients_slow_down_then_block_the_client() {
+    common::run_on_all_dbs(|db| async move {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let (tx, _) = broadcast::channel::<DashboardEvent>(100);
+        let outbound = Arc::new(OutboundService::new(
+            "srs_secret_key_123".to_string(),
+            hickory_resolver::TokioResolver::builder_tokio()
+                .unwrap()
+                .build()
+                .unwrap(),
+            "example.com".to_string(),
+            db.clone(),
+            temp_dir.path().to_path_buf(),
+        ));
+        let rate_limiter = Arc::new(RateLimiter::new());
+        let limits = InboundLimits {
+            tarpit_threshold: 2,
+            block_threshold: 3,
+            tarpit_duration_secs: 0,
+            ..Default::default()
+        };
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let local_addr = listener.local_addr().unwrap();
+        let session_limiter = rate_limiter.clone();
+        let session_db = db.clone();
+        let storage = temp_dir.path().to_path_buf();
+        let server = tokio::spawn(async move {
+            let (socket, _) = listener.accept().await.unwrap();
+            let mut session = SmtpSession::new(
+                socket,
+                None,
+                session_db,
+                storage,
+                outbound,
+                tx,
+                "127.0.0.1".parse().unwrap(),
+                session_limiter,
+                limits,
+            );
+            session.handle().await.is_err()
+        });
+
+        let stream = TcpStream::connect(local_addr).await.unwrap();
+        let (read_half, mut writer) = stream.into_split();
+        let mut reader = BufReader::new(read_half);
+        assert!(read_reply(&mut reader).await.starts_with("220"));
+        writer.write_all(b"EHLO sender.com\r\n").await.unwrap();
+        assert!(read_reply(&mut reader).await.starts_with("250"));
+        writer
+            .write_all(b"MAIL FROM:<someone@sender.com>\r\n")
+            .await
+            .unwrap();
+        assert!(read_reply(&mut reader).await.starts_with("250"));
+
+        for name in ["nobody1", "nobody2"] {
+            writer
+                .write_all(format!("RCPT TO:<{}@example.com>\r\n", name).as_bytes())
+                .await
+                .unwrap();
+            assert!(read_reply(&mut reader).await.starts_with("550"));
+        }
+        writer
+            .write_all(b"RCPT TO:<nobody3@example.com>\r\n")
+            .await
+            .unwrap();
+        assert!(read_reply(&mut reader).await.starts_with("554"));
+
+        assert!(
+            server.await.unwrap(),
+            "the session ends once the client is blocked"
+        );
+        assert!(rate_limiter.is_blocked("127.0.0.1".parse().unwrap(), Instant::now()));
+    })
+    .await;
 }
