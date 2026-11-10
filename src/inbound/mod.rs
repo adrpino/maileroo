@@ -11,7 +11,8 @@ use crate::outbound::OutboundService;
 
 use crate::db::DbPool;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
+use tokio::io::AsyncWriteExt;
 use tokio::net::TcpListener;
 
 pub async fn run_server(
@@ -37,17 +38,16 @@ pub async fn run_server(
     let limiter_clone = rate_limiter.clone();
     tokio::spawn(async move {
         loop {
-            tokio::time::sleep(Duration::from_secs(600)).await; // Run cleanup every 10 minutes
-            limiter_clone.cleanup(Duration::from_secs(3600)); // Remove entries older than 1 hour
+            tokio::time::sleep(Duration::from_secs(600)).await;
+            limiter_clone.cleanup(Instant::now());
         }
     });
 
     loop {
-        let (socket, peer_addr) = listener.accept().await?;
+        let (mut socket, peer_addr) = listener.accept().await?;
         let peer_ip = peer_addr.ip();
 
-        // Immediate block check!
-        if blocklist.is_blocked(peer_ip) {
+        if blocklist.is_blocked(peer_ip) || rate_limiter.is_blocked(peer_ip, Instant::now()) {
             tracing::warn!(
                 "Connection from blocked IP {} dropped immediately.",
                 peer_ip
@@ -55,17 +55,33 @@ pub async fn run_server(
             continue; // Drop the TCP connection instantly by letting 'socket' go out of scope
         }
 
+        let Some(connection_slot) =
+            rate_limiter.open_connection(peer_ip, limits.max_connections_per_network)
+        else {
+            tracing::warn!(
+                "IP {} already holds {} connections; refusing another.",
+                peer_ip,
+                limits.max_connections_per_network
+            );
+            tokio::spawn(async move {
+                let _ = socket
+                    .write_all(b"421 4.7.0 Too many connections from your network\r\n")
+                    .await;
+            });
+            continue;
+        };
+
         let acceptor_clone = acceptor.clone();
         let pool_clone = db_pool.clone();
         let storage_dir_clone = storage_dir.clone();
         let outbound_clone = outbound.clone();
         let tx_clone = tx.clone();
         let rate_limiter_clone = rate_limiter.clone();
-        let blocklist_clone = blocklist.clone();
         let limits_clone = limits;
         let filter_engine_clone = filter_engine.clone();
 
         tokio::spawn(async move {
+            let _connection_slot = connection_slot;
             let mut session = SmtpSession::new(
                 socket,
                 acceptor_clone,
@@ -75,7 +91,6 @@ pub async fn run_server(
                 tx_clone,
                 peer_ip,
                 rate_limiter_clone,
-                blocklist_clone,
                 limits_clone,
             )
             .with_filter_engine(filter_engine_clone);
